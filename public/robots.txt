@@ -4,7 +4,7 @@ Allow: /
 Disallow: /api/
 
 # Host
-Host: https://ninal.cloud
+Host: https://ninal.online
 
 # Sitemaps
-Sitemap: https://ninal.cloud/sitemap.xml
+Sitemap: https://ninal.online/sitemap.xml
