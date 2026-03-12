@@ -2,7 +2,14 @@
   "permissions": {
     "allow": [
       "Bash(npm install)",
-      "Bash(npm run build)"
+      "Bash(npm run build)",
+      "Bash(npm install next-mdx-remote@^6.0.0)",
+      "Bash(git -C /Volumes/ZHITAI_7100/myBlog diff --stat)",
+      "Bash(git push origin main)",
+      "Bash(npm info next versions --json)",
+      "Bash(npm audit)",
+      "Bash(npm install next@14.2.35 @next/mdx@14.2.35 eslint-config-next@14.2.35)",
+      "Bash(npm uninstall next-mdx-remote @mdx-js/loader @mdx-js/react @next/mdx)"
     ]
   }
 }
