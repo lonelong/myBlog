@@ -1,0 +1,112 @@
+---
+title: "构建多模型 AI 聊天应用"
+date: "2024-03-10"
+description: "使用 Next.js 构建支持 Claude、GPT、DeepSeek 等多种大语言模型的聊天应用"
+tags: ["AI", "Next.js", "OpenAI", "Claude"]
+cover: "/images/ai-chat.png"
+---
+
+## 项目概述
+
+本文介绍如何构建一个支持多种 AI 模型的聊天应用，包括 Claude、GPT-4、DeepSeek、Gemini 等。核心思路是利用 OpenAI 兼容接口统一调用不同提供商的模型。
+
+## 架构设计
+
+### 统一接口层
+
+大多数 AI 提供商都支持 OpenAI 兼容的 API 格式，这意味着我们可以用同一个 SDK 调用不同的模型：
+
+```typescript
+import OpenAI from 'openai'
+
+// DeepSeek
+const deepseek = new OpenAI({
+  baseURL: 'https://api.deepseek.com/v1',
+  apiKey: process.env.DEEPSEEK_API_KEY,
+})
+
+// Gemini
+const gemini = new OpenAI({
+  baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  apiKey: process.env.GEMINI_API_KEY,
+})
+```
+
+### 流式响应
+
+使用 Server-Sent Events (SSE) 实现流式输出，让用户看到 AI 逐字生成的效果：
+
+```typescript
+export async function POST(req: Request) {
+  const { messages, model } = await req.json()
+
+  const stream = await client.chat.completions.create({
+    model,
+    messages,
+    stream: true,
+  })
+
+  const encoder = new TextEncoder()
+  const readable = new ReadableStream({
+    async start(controller) {
+      for await (const chunk of stream) {
+        const content = chunk.choices[0]?.delta?.content
+        if (content) {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({ content })}\n\n`)
+          )
+        }
+      }
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+      controller.close()
+    },
+  })
+
+  return new Response(readable, {
+    headers: { 'Content-Type': 'text/event-stream' },
+  })
+}
+```
+
+## 前端实现要点
+
+### 流式读取
+
+```typescript
+const reader = response.body.getReader()
+const decoder = new TextDecoder()
+
+while (true) {
+  const { done, value } = await reader.read()
+  if (done) break
+
+  const text = decoder.decode(value)
+  // 解析 SSE 数据并更新 UI
+}
+```
+
+### Markdown 渲染
+
+AI 的回复通常包含 Markdown 格式，使用 `react-markdown` 渲染：
+
+```typescript
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+
+<ReactMarkdown remarkPlugins={[remarkGfm]}>
+  {message.content}
+</ReactMarkdown>
+```
+
+## 模型对比
+
+| 模型 | 优势 | 适用场景 |
+|------|------|---------|
+| Claude Sonnet | 代码质量高 | 编程辅助 |
+| GPT-4o | 多模态 | 通用对话 |
+| DeepSeek V3 | 性价比高 | 日常使用 |
+| Gemini Flash | 速度快 | 快速问答 |
+
+## 总结
+
+通过统一的 OpenAI 兼容接口，我们可以轻松地在一个应用中集成多种 AI 模型，让用户根据需求自由切换。这种架构也方便后续添加新的模型提供商。

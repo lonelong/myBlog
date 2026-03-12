@@ -1,0 +1,97 @@
+---
+title: "Next.js 14 入门指南"
+date: "2024-03-01"
+description: "从零开始学习 Next.js 14 App Router，了解服务端组件、路由系统和数据获取"
+tags: ["Next.js", "React", "教程"]
+cover: "/images/nextjs.png"
+---
+
+## 为什么选择 Next.js
+
+Next.js 是目前最流行的 React 全栈框架之一，它提供了许多开箱即用的功能，让前端开发变得更加高效。
+
+### 核心优势
+
+- **服务端渲染 (SSR)**: 提升首屏加载速度和 SEO
+- **App Router**: 基于文件系统的路由，直观简洁
+- **React Server Components**: 减少客户端 JavaScript 体积
+- **内置优化**: 图片、字体、脚本自动优化
+
+## 快速开始
+
+使用以下命令创建一个新的 Next.js 项目：
+
+```bash
+npx create-next-app@latest my-app --typescript --tailwind --app
+cd my-app
+npm run dev
+```
+
+## App Router 基础
+
+Next.js 14 使用 App Router 作为默认路由系统。每个 `page.tsx` 文件对应一个路由：
+
+```typescript
+// app/page.tsx - 首页 /
+export default function Home() {
+  return <h1>Welcome</h1>
+}
+
+// app/blog/page.tsx - 博客页 /blog
+export default function Blog() {
+  return <h1>Blog</h1>
+}
+
+// app/blog/[slug]/page.tsx - 动态路由 /blog/:slug
+export default function Post({ params }: { params: { slug: string } }) {
+  return <h1>{params.slug}</h1>
+}
+```
+
+## 服务端 vs 客户端组件
+
+在 App Router 中，组件默认是服务端组件。如果需要使用浏览器 API 或 React hooks，需要在文件顶部添加 `'use client'` 指令。
+
+```typescript
+'use client'
+
+import { useState } from 'react'
+
+export default function Counter() {
+  const [count, setCount] = useState(0)
+  return <button onClick={() => setCount(count + 1)}>{count}</button>
+}
+```
+
+### 什么时候用客户端组件
+
+| 场景 | 推荐 |
+|------|------|
+| 数据获取 | 服务端组件 |
+| 使用 hooks | 客户端组件 |
+| 事件监听 | 客户端组件 |
+| SEO 关键内容 | 服务端组件 |
+
+## 数据获取
+
+Next.js 14 推荐在服务端组件中直接使用 `async/await` 获取数据：
+
+```typescript
+async function getData() {
+  const res = await fetch('https://api.example.com/data', {
+    next: { revalidate: 3600 } // ISR: 每小时重新验证
+  })
+  return res.json()
+}
+
+export default async function Page() {
+  const data = await getData()
+  return <div>{JSON.stringify(data)}</div>
+}
+```
+
+## 总结
+
+Next.js 14 带来了许多令人兴奋的功能，App Router 和 React Server Components 的结合让全栈开发变得更加流畅。建议从小项目开始实践，逐步深入理解每个特性。
+
+> 开始动手实践吧，最好的学习方式就是写代码！
