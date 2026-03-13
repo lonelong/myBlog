@@ -5,7 +5,8 @@ import Link from 'next/link'
 import {
   Github,
   Twitter,
-  Linkedin,
+  Send,
+  Mail,
   ArrowRight,
   Code2,
   Palette,
@@ -115,9 +116,10 @@ export default function HomePage() {
             {/* Social links */}
             <div className="flex items-center justify-center gap-3 mt-10">
               {[
-                { icon: Github, href: 'https://github.com/yourusername' },
-                { icon: Twitter, href: 'https://twitter.com/yourhandle' },
-                { icon: Linkedin, href: 'https://linkedin.com/in/yourname' },
+                { icon: Github, href: process.env.NEXT_PUBLIC_GITHUB_URL || 'https://github.com/lonelong' },
+                { icon: Twitter, href: process.env.NEXT_PUBLIC_TWITTER_URL || 'https://x.com/SyLiu49577' },
+                { icon: Send, href: process.env.NEXT_PUBLIC_TELEGRAM_URL || 'https://t.me/ninal_zw' },
+                { icon: Mail, href: `mailto:${process.env.NEXT_PUBLIC_EMAIL || 'longxiao2025@gmail.com'}` },
               ].map((social, i) => (
                 <motion.a
                   key={i}

@@ -1,10 +1,28 @@
-import { Github, Twitter, Linkedin, Mail } from 'lucide-react'
+'use client'
+
+import { Github, Twitter, Mail, Send } from 'lucide-react'
 
 const socialLinks = [
-  { icon: Github, href: 'https://github.com/yourusername', label: 'GitHub' },
-  { icon: Twitter, href: 'https://twitter.com/yourhandle', label: 'Twitter' },
-  { icon: Linkedin, href: 'https://linkedin.com/in/yourname', label: 'LinkedIn' },
-  { icon: Mail, href: 'mailto:your@email.com', label: 'Email' },
+  {
+    icon: Github,
+    href: process.env.NEXT_PUBLIC_GITHUB_URL || 'https://github.com/lonelong',
+    label: 'GitHub',
+  },
+  {
+    icon: Twitter,
+    href: process.env.NEXT_PUBLIC_TWITTER_URL || 'https://x.com/SyLiu49577',
+    label: 'X (Twitter)',
+  },
+  {
+    icon: Send,
+    href: process.env.NEXT_PUBLIC_TELEGRAM_URL || 'https://t.me/ninal_zw',
+    label: 'Telegram',
+  },
+  {
+    icon: Mail,
+    href: `mailto:${process.env.NEXT_PUBLIC_EMAIL || 'longxiao2025@gmail.com'}`,
+    label: 'Email',
+  },
 ]
 
 export default function Footer() {

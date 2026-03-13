@@ -30,7 +30,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: 'summary_large_image',
-    creator: '@yourhandle',
+    creator: '@SyLiu49577',
   },
   robots: {
     index: true,
