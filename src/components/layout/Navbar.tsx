@@ -7,6 +7,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Menu, X } from 'lucide-react'
 import { clsx } from 'clsx'
 import ThemeToggle from '@/components/ui/ThemeToggle'
+import { siteConfig } from '@/lib/config'
 
 const navLinks = [
   { href: '/', label: '首页' },
@@ -27,7 +28,7 @@ export default function Navbar() {
           href="/"
           className="text-lg font-bold tracking-tight hover:text-[var(--accent)] transition-colors"
         >
-          <span className="gradient-text">ZS</span>
+          <span className="gradient-text">{siteConfig.authorName}</span>
           <span className="ml-1 text-[var(--text-primary)]">.dev</span>
         </Link>
 

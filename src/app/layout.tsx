@@ -3,6 +3,7 @@ import { Inter } from 'next/font/google'
 import { ThemeProvider } from '@/components/ui/ThemeProvider'
 import Navbar from '@/components/layout/Navbar'
 import Footer from '@/components/layout/Footer'
+import { siteConfig } from '@/lib/config'
 import './globals.css'
 
 const inter = Inter({
@@ -15,17 +16,17 @@ export const metadata: Metadata = {
     process.env.NEXT_PUBLIC_SITE_URL || 'https://ninal.online'
   ),
   title: {
-    default: 'ZW | 前端开发者',
-    template: '%s | ZW',
+    default: `${siteConfig.authorName} | 前端开发者`,
+    template: `%s | ${siteConfig.authorName}`,
   },
   description: '专注 React/Next.js 的前端工程师，分享技术文章与开源项目',
   keywords: ['前端开发', 'React', 'Next.js', 'TypeScript', '作品集', '博客'],
-  authors: [{ name: 'ZW' }],
+  authors: [{ name: siteConfig.authorName }],
   openGraph: {
     type: 'website',
     locale: 'zh_CN',
     url: process.env.NEXT_PUBLIC_SITE_URL,
-    siteName: 'ZW的博客',
+    siteName: `${siteConfig.authorName}的博客`,
     images: [{ url: '/og-image.png', width: 1200, height: 630 }],
   },
   twitter: {

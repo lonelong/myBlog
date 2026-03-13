@@ -15,6 +15,7 @@ import {
   Globe,
   Cpu,
 } from 'lucide-react'
+import { siteConfig } from '@/lib/config'
 import BlogCard from '@/components/blog/BlogCard'
 import ProjectCard from '@/components/projects/ProjectCard'
 import ScrollToTop from '@/components/ui/ScrollToTop'
@@ -87,7 +88,7 @@ export default function HomePage() {
 
             <h1 className="text-4xl sm:text-6xl lg:text-7xl font-bold tracking-tight mb-6">
               Hi, I&apos;m{' '}
-              <span className="gradient-text">ZW</span>
+              <span className="gradient-text">{siteConfig.authorName}</span>
               <br />
               <span className="text-[var(--text-secondary)]">Frontend Developer</span>
             </h1>
@@ -116,10 +117,10 @@ export default function HomePage() {
             {/* Social links */}
             <div className="flex items-center justify-center gap-3 mt-10">
               {[
-                { icon: Github, href: process.env.NEXT_PUBLIC_GITHUB_URL || 'https://github.com/lonelong' },
-                { icon: Twitter, href: process.env.NEXT_PUBLIC_TWITTER_URL || 'https://x.com/SyLiu49577' },
-                { icon: Send, href: process.env.NEXT_PUBLIC_TELEGRAM_URL || 'https://t.me/ninal_zw' },
-                { icon: Mail, href: `mailto:${process.env.NEXT_PUBLIC_EMAIL || 'longxiao2025@gmail.com'}` },
+                { icon: Github, href: siteConfig.githubUrl },
+                { icon: Twitter, href: siteConfig.twitterUrl },
+                { icon: Send, href: siteConfig.telegramUrl },
+                { icon: Mail, href: `mailto:${siteConfig.email}` },
               ].map((social, i) => (
                 <motion.a
                   key={i}

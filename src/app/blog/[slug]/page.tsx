@@ -6,6 +6,7 @@ import { Calendar, Clock } from 'lucide-react'
 import Tag from '@/components/ui/Tag'
 import TableOfContents from '@/components/blog/TableOfContents'
 import { MDXContent } from '@/components/blog/MDXContent'
+import { siteConfig } from '@/lib/config'
 import type { Metadata } from 'next'
 
 interface Props {
@@ -52,7 +53,7 @@ export default function BlogPostPage({ params }: Props) {
     datePublished: post.date,
     author: {
       '@type': 'Person',
-      name: 'ZW',
+      name: siteConfig.authorName,
     },
   }
 
