@@ -1,0 +1,327 @@
+---
+title: "Next.js 项目部署完整指南：域名购买 + Cloudflare DNS + Vercel 部署"
+date: "2024-03-15"
+description: "从零开始完成 Next.js 项目的生产部署，包括域名购买、Cloudflare DNS 配置、Vercel 部署上线，以及实际遇到的坑和解决方案"
+tags: ["Next.js", "Vercel", "Cloudflare", "部署", "教程"]
+---
+
+## 前言
+
+把 Next.js 项目从本地跑通到真正上线，中间需要经历部署平台配置、域名购买、DNS 解析等多个环节。本文记录了我将个人博客项目部署到 Vercel 并绑定自定义域名 `ninal.online` 的完整过程，包括踩过的坑和对应的解决方案。
+
+## 整体流程概览
+
+```
+本地开发完成
+    ↓
+推送代码到 GitHub
+    ↓
+Vercel 导入项目 → 自动构建部署
+    ↓
+配置环境变量（API Keys 等）
+    ↓
+购买自定义域名（阿里云）
+    ↓
+Cloudflare 配置 DNS 解析
+    ↓
+Vercel 绑定自定义域名
+    ↓
+上线完成 ✅
+```
+
+---
+
+## 第一步：推送代码到 GitHub
+
+Vercel 通过 GitHub 仓库自动部署，首先确保代码已推送：
+
+```bash
+git init
+git add .
+git commit -m "Initial commit"
+git remote add origin https://github.com/你的用户名/你的仓库名.git
+git push -u origin main
+```
+
+### 注意 .gitignore
+
+确保敏感文件不会被推送到 GitHub：
+
+```
+# .gitignore
+node_modules/
+.next/
+.env
+.env.local
+```
+
+`.env` 文件包含 API 密钥等敏感信息，绝对不能提交到仓库。
+
+---
+
+## 第二步：Vercel 部署项目
+
+### 2.1 导入项目
+
+1. 访问 [vercel.com](https://vercel.com)，使用 GitHub 账号登录
+2. 点击 **"Add New Project"**
+3. 选择你的 GitHub 仓库，点击 **"Import"**
+
+### 2.2 配置构建设置
+
+Vercel 会自动识别 Next.js 项目，通常不需要手动配置。但如果你的项目根目录有 `vercel.json`，可以通过它指定：
+
+```json
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next",
+  "framework": "nextjs",
+  "regions": ["sin1"]
+}
+```
+
+`regions` 设置为 `sin1`（新加坡）可以优化亚洲地区的访问速度。
+
+### 2.3 配置环境变量
+
+在 Vercel 项目的 **Settings → Environment Variables** 中添加：
+
+| 变量名 | 用途 | 示例值 |
+|--------|------|--------|
+| `NEXT_PUBLIC_SITE_URL` | 网站 URL | `https://ninal.online` |
+| `NEXT_PUBLIC_AUTHOR_NAME` | 作者名称 | `ZW` |
+| `DEEPSEEK_API_KEY` | DeepSeek API 密钥 | `sk-xxxxx` |
+| `OPENAI_API_KEY` | OpenAI API 密钥 | `sk-xxxxx` |
+
+> **关键区别**：`NEXT_PUBLIC_` 开头的变量会暴露给浏览器端代码，不要用这个前缀存放 API 密钥。API 密钥只用于服务端 API 路由，不需要 `NEXT_PUBLIC_` 前缀。
+
+### 2.4 触发部署
+
+配置完成后点击 **"Deploy"**，Vercel 会自动执行 `npm install` → `npm run build`，构建成功后生成一个 `.vercel.app` 的临时域名。
+
+---
+
+## 第三步：购买域名
+
+### 选择注册商
+
+国内常见的域名注册商：
+
+| 注册商 | 优势 |
+|--------|------|
+| **阿里云（万网）** | 域名种类全，管理面板好用 |
+| **腾讯云** | 与微信生态集成好 |
+
+我选择了在阿里云购买 `ninal.online`，`.online` 域名首年价格较低，适合个人项目。
+
+### 购买流程
+
+1. 登录 [阿里云域名注册](https://wanwang.aliyun.com/)
+2. 搜索想要的域名，加入购物车
+3. 完成实名认证（国内注册商必须）
+4. 付款完成购买
+
+---
+
+## 第四步：Cloudflare 配置 DNS
+
+### 4.1 为什么用 Cloudflare？
+
+直接用阿里云的 DNS 也可以，但 Cloudflare 提供：
+
+- **免费 CDN 加速**（全球节点）
+- **免费 SSL 证书**
+- **DDoS 防护**
+- **DNS 解析速度快**
+
+### 4.2 添加域名到 Cloudflare
+
+1. 注册/登录 [Cloudflare](https://dash.cloudflare.com/)
+2. 点击 **"Add a site"**，输入你的域名（如 `ninal.online`）
+3. 选择 **Free 免费计划**
+4. Cloudflare 会自动扫描已有的 DNS 记录
+
+### 4.3 修改 NS 服务器
+
+Cloudflare 会给你两个 NS 服务器地址，类似：
+
+```
+hera.ns.cloudflare.com
+merlin.ns.cloudflare.com
+```
+
+回到阿里云域名管理，修改 NS 服务器：
+
+1. 进入阿里云控制台 → 域名管理
+2. 找到你的域名，点击 **"管理"**
+3. 找到 **DNS 修改**（或 **NS 服务器修改**）
+4. 将原来的 `dns29.hichina.com` 和 `dns30.hichina.com` 改为 Cloudflare 提供的两个地址
+
+> NS 服务器切换通常需要几分钟到 48 小时生效，实际体验一般 10 分钟左右就好了。
+
+### 4.4 添加 DNS 记录
+
+在 Cloudflare 的 DNS 设置中添加两条记录：
+
+| 类型 | 名称 | 内容 | 代理状态 |
+|------|------|------|----------|
+| **A** | `@` | `76.76.21.21` | DNS only（灰色云朵） |
+| **CNAME** | `www` | `cname.vercel-dns.com` | DNS only（灰色云朵） |
+
+- `76.76.21.21` 是 Vercel 的 IP 地址
+- `cname.vercel-dns.com` 是 Vercel 的 CNAME 目标
+- `@` 代表根域名（`ninal.online`）
+- `www` 代表 `www.ninal.online`
+
+### 4.5 关于代理模式
+
+Cloudflare 的云朵图标有两种状态：
+
+- **灰色云朵（DNS only）**：Cloudflare 只做 DNS 解析，流量直接到 Vercel
+- **橙色云朵（Proxied）**：流量经过 Cloudflare CDN 代理
+
+**建议使用灰色云朵（DNS only）**，因为 Vercel 本身已有全球 CDN 和 SSL，开启 Cloudflare 代理可能导致：
+
+- SSL 证书冲突
+- 缓存策略冲突
+- 增加不必要的延迟
+
+如果你的服务器没有自带 CDN（比如自建 VPS），才需要开启橙色云朵来利用 Cloudflare 的 CDN。
+
+---
+
+## 第五步：Vercel 绑定域名
+
+1. 进入 Vercel 项目的 **Settings → Domains**
+2. 输入你的域名 `ninal.online`，点击 **"Add"**
+3. Vercel 会自动检测 DNS 配置是否正确
+4. 等待 SSL 证书自动签发（通常几分钟）
+
+看到绿色的 **"Valid Configuration"** 就说明配置成功。
+
+---
+
+## 踩坑记录与解决方案
+
+### 坑 1：依赖包安全漏洞导致构建失败
+
+**报错信息**：
+
+```
+Error: `next-mdx-remote` version 4.4.1 has a critical security vulnerability
+```
+
+**原因**：Vercel 在构建时会检查依赖包的安全性，如果存在已知漏洞会阻止构建。
+
+**解决方案**：
+
+1. 如果这个包正在使用，升级到安全版本：`npm install next-mdx-remote@latest`
+2. 如果这个包实际未使用（只是装了没用到），直接删除：
+
+```bash
+npm uninstall next-mdx-remote @mdx-js/loader @mdx-js/react @next/mdx
+```
+
+> **教训**：定期运行 `npm audit` 检查依赖安全性，及时清理未使用的依赖。
+
+### 坑 2：Next.js 版本安全漏洞
+
+**报错信息**：
+
+```
+Error: Next.js version 14.2.15 has a critical security vulnerability
+```
+
+**解决方案**：
+
+```bash
+npm install next@14.2.35 eslint-config-next@14.2.35
+```
+
+升级到安全的补丁版本，同时确保 `eslint-config-next` 版本与 Next.js 一致。
+
+### 坑 3：包管理器冲突（pnpm-lock.yaml）
+
+**报错信息**：
+
+```
+ERR_PNPM_OUTDATED_LOCKFILE
+```
+
+**原因**：项目中同时存在 `package-lock.json` 和 `pnpm-lock.yaml`。Vercel 检测到 `pnpm-lock.yaml` 后优先使用 pnpm，但 lockfile 与 `package.json` 不同步。
+
+**解决方案**：
+
+```bash
+# 删除不需要的 lock 文件，只保留一个
+rm pnpm-lock.yaml
+```
+
+> **教训**：一个项目只保留一个 lock 文件。如果你用 npm，就只留 `package-lock.json`；用 pnpm 就只留 `pnpm-lock.yaml`。
+
+### 坑 4：环境变量在页面中不生效
+
+**现象**：`.env` 中设置了 `NEXT_PUBLIC_AUTHOR_NAME=ZW`，但页面上显示的还是硬编码的值。
+
+**原因**：虽然设置了环境变量，但代码中到处是硬编码的 `"ZW"`，并没有读取环境变量。
+
+**解决方案**：创建一个集中配置文件，所有组件从这里读取：
+
+```typescript
+// src/lib/config.ts
+export const siteConfig = {
+  authorName: process.env.NEXT_PUBLIC_AUTHOR_NAME || 'ZW',
+  siteUrl: process.env.NEXT_PUBLIC_SITE_URL || 'https://ninal.online',
+  githubUrl: process.env.NEXT_PUBLIC_GITHUB_URL,
+  twitterUrl: process.env.NEXT_PUBLIC_TWITTER_URL,
+  email: process.env.NEXT_PUBLIC_EMAIL,
+}
+```
+
+然后在组件中统一使用 `siteConfig.authorName`，而不是硬编码字符串。
+
+> **教训**：项目初始化时就应该建立集中配置，避免散落在各处的硬编码值。
+
+---
+
+## 部署后的检查清单
+
+部署完成后，建议逐项检查：
+
+- [ ] 所有页面能正常访问（首页、博客、项目、聊天）
+- [ ] HTTPS 证书是否生效（浏览器地址栏显示锁）
+- [ ] 暗色/亮色主题切换正常
+- [ ] AI 聊天功能可用（环境变量中配置了 API Key）
+- [ ] 移动端响应式布局正常
+- [ ] SEO：访问 `/sitemap.xml` 和 `/robots.txt` 确认生成
+- [ ] Open Graph：分享到社交平台时预览卡片是否正确
+
+---
+
+## 完整架构图
+
+```
+用户浏览器
+    │
+    ▼
+Cloudflare DNS（解析 ninal.online → Vercel IP）
+    │
+    ▼
+Vercel 边缘网络（全球 CDN）
+    ├── 静态页面（HTML/CSS/JS）→ 直接返回
+    ├── API 路由（/api/chat）→ Serverless Function (sin1)
+    │   └── 调用 AI API（DeepSeek / Claude / GPT）
+    └── 博客详情页 → 构建时预渲染的静态 HTML
+```
+
+---
+
+## 总结
+
+整个部署流程看似复杂，但拆解后每一步都很清晰：
+
+1. **Vercel** 负责构建和托管，对 Next.js 有原生支持
+2. **Cloudflare** 负责 DNS 解析，可选 CDN 加速
+3. **阿里云** 负责域名注册，NS 指向 Cloudflare
+
+最关键的经验是：**部署前先在本地跑一遍 `npm run build`**，确保没有编译错误再推送。大部分部署失败都可以在本地复现和修复，远比在 Vercel 上反复试错要高效。

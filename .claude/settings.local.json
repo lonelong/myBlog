@@ -9,7 +9,11 @@
       "Bash(npm info next versions --json)",
       "Bash(npm audit)",
       "Bash(npm install next@14.2.35 @next/mdx@14.2.35 eslint-config-next@14.2.35)",
-      "Bash(npm uninstall next-mdx-remote @mdx-js/loader @mdx-js/react @next/mdx)"
+      "Bash(npm uninstall next-mdx-remote @mdx-js/loader @mdx-js/react @next/mdx)",
+      "Bash(curl -sS http://localhost:3003)",
+      "Bash(lsof -ti:3003)",
+      "Bash(xargs kill -9)",
+      "mcp__Claude_Preview__preview_start"
     ]
   }
 }

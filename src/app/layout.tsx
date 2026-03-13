@@ -4,6 +4,7 @@ import { ThemeProvider } from '@/components/ui/ThemeProvider'
 import Navbar from '@/components/layout/Navbar'
 import Footer from '@/components/layout/Footer'
 import { siteConfig } from '@/lib/config'
+import StarryBackground from '@/components/ui/StarryBackground'
 import './globals.css'
 
 const inter = Inter({
@@ -60,7 +61,8 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange={false}
         >
-          <div className="min-h-screen flex flex-col">
+          <StarryBackground />
+          <div className="relative z-10 min-h-screen flex flex-col">
             <Navbar />
             <main className="flex-1">{children}</main>
             <Footer />
