@@ -48,7 +48,7 @@
   .glass-card {
     @apply bg-[var(--bg-card)] border border-[var(--border)] rounded-xl;
     background: var(--glass);
-    backdrop-filter: blur(10px);
+    backdrop-filter: blur(6px);
   }
 
   .hover-glow {
