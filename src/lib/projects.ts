@@ -41,30 +41,6 @@ export const projects: Project[] = [
     stars: 89,
   },
   {
-    id: 'cli-tool',
-    title: 'DevTools CLI',
-    description: '前端开发者命令行工具集',
-    longDescription:
-      '集成项目脚手架生成、代码格式化配置、Git hooks 设置、依赖分析等功能的 CLI 工具。支持交互式配置和模板自定义。',
-    tags: ['Node.js', 'TypeScript', 'Commander', 'Inquirer'],
-    category: 'tool',
-    githubUrl: 'https://github.com/yourusername/devtools-cli',
-    featured: false,
-    stars: 45,
-  },
-  {
-    id: 'image-optimizer',
-    title: 'Image Optimizer',
-    description: 'AI 驱动的图片优化服务',
-    longDescription:
-      '基于 Sharp 和 AI 模型的智能图片处理服务，支持批量压缩、格式转换、智能裁剪、水印添加、EXIF 信息处理等。',
-    tags: ['Node.js', 'Sharp', 'Express', 'Docker'],
-    category: 'ai',
-    githubUrl: 'https://github.com/yourusername/image-optimizer',
-    featured: false,
-    stars: 67,
-  },
-  {
     id: 'portfolio-starter',
     title: 'Portfolio Starter',
     description: 'Next.js 作品集博客模板',
