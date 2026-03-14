@@ -13,7 +13,9 @@
       "Bash(curl -sS http://localhost:3003)",
       "Bash(lsof -ti:3003)",
       "Bash(xargs kill -9)",
-      "mcp__Claude_Preview__preview_start"
+      "mcp__Claude_Preview__preview_start",
+      "Bash(npm uninstall:*)",
+      "Bash(npx next:*)"
     ]
   }
 }

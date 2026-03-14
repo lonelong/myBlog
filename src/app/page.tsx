@@ -49,15 +49,19 @@ export default function HomePage() {
   const [featuredProjects, setFeaturedProjects] = useState<Project[]>([])
 
   useEffect(() => {
-    fetch('/api/blog')
+    const controller = new AbortController()
+
+    fetch('/api/blog', { signal: controller.signal })
       .then((res) => res.json())
       .then((data) => setPosts(data.slice(0, 3)))
-      .catch(() => {})
+      .catch((err) => { if (err.name !== 'AbortError') console.error(err) })
 
-    fetch('/api/projects')
+    fetch('/api/projects', { signal: controller.signal })
       .then((res) => res.json())
       .then((data) => setFeaturedProjects(data.filter((p: Project) => p.featured).slice(0, 3)))
-      .catch(() => {})
+      .catch((err) => { if (err.name !== 'AbortError') console.error(err) })
+
+    return () => controller.abort()
   }, [])
 
   return (
@@ -123,7 +127,7 @@ export default function HomePage() {
                 { icon: Mail, href: `mailto:${siteConfig.email}` },
               ].map((social, i) => (
                 <motion.a
-                  key={i}
+                  key={social.href}
                   href={social.href}
                   target="_blank"
                   rel="noopener noreferrer"

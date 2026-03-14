@@ -1,5 +1,6 @@
 'use client'
 
+import { memo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { User } from 'lucide-react'
@@ -10,7 +11,7 @@ interface ChatMessageProps {
   isLoading?: boolean
 }
 
-export default function ChatMessage({ message, isLoading }: ChatMessageProps) {
+export default memo(function ChatMessage({ message, isLoading }: ChatMessageProps) {
   const isUser = message.role === 'user'
 
   return (
@@ -72,4 +73,4 @@ export default function ChatMessage({ message, isLoading }: ChatMessageProps) {
       </div>
     </div>
   )
-}
+})

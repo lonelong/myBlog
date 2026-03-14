@@ -50,6 +50,7 @@ export interface AIProviders {
 }
 
 export interface ChatMessage {
+  id: string
   role: 'user' | 'assistant'
   content: string
 }

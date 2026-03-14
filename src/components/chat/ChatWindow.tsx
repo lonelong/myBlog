@@ -25,7 +25,11 @@ export default function ChatWindow() {
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY)
-      if (saved) setMessages(JSON.parse(saved))
+      if (saved) {
+        const parsed = JSON.parse(saved) as ChatMessageType[]
+        // Migrate old messages that lack an id
+        setMessages(parsed.map(msg => ({ ...msg, id: msg.id || crypto.randomUUID() })))
+      }
       const savedProvider = localStorage.getItem(PROVIDER_KEY)
       const savedModel = localStorage.getItem(MODEL_KEY)
       if (savedProvider) setProvider(savedProvider)
@@ -57,9 +61,14 @@ export default function ChatWindow() {
       if (!content.trim() || isLoading) return
 
       setError(null)
-      const userMessage: ChatMessageType = { role: 'user', content: content.trim() }
-      const newMessages = [...messages, userMessage]
-      setMessages(newMessages)
+      const userMessage: ChatMessageType = { id: crypto.randomUUID(), role: 'user', content: content.trim() }
+
+      // Use functional update to get latest messages for API call
+      let messagesForApi: ChatMessageType[] = []
+      setMessages((prev) => {
+        messagesForApi = [...prev, userMessage]
+        return messagesForApi
+      })
       setIsLoading(true)
 
       // Create abort controller
@@ -70,7 +79,7 @@ export default function ChatWindow() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            messages: newMessages,
+            messages: messagesForApi.map(({ role, content }) => ({ role, content })),
             provider,
             model,
           }),
@@ -89,7 +98,8 @@ export default function ChatWindow() {
         let assistantContent = ''
 
         // Add empty assistant message
-        setMessages((prev) => [...prev, { role: 'assistant', content: '' }])
+        const assistantId = crypto.randomUUID()
+        setMessages((prev) => [...prev, { id: assistantId, role: 'assistant', content: '' }])
 
         while (true) {
           const { done, value } = await reader.read()
@@ -109,8 +119,9 @@ export default function ChatWindow() {
                 assistantContent += parsed.content
                 setMessages((prev) => {
                   const updated = [...prev]
+                  const last = updated[updated.length - 1]
                   updated[updated.length - 1] = {
-                    role: 'assistant',
+                    ...last,
                     content: assistantContent,
                   }
                   return updated
@@ -138,7 +149,7 @@ export default function ChatWindow() {
         abortRef.current = null
       }
     },
-    [messages, provider, model, isLoading]
+    [provider, model, isLoading]
   )
 
   const handleClear = () => {
@@ -184,7 +195,7 @@ export default function ChatWindow() {
         )}
 
         {messages.map((msg, i) => (
-          <ChatMessage key={i} message={msg} isLoading={isLoading && i === messages.length - 1 && msg.role === 'assistant'} />
+          <ChatMessage key={msg.id} message={msg} isLoading={isLoading && i === messages.length - 1 && msg.role === 'assistant'} />
         ))}
 
         {isLoading && messages.length > 0 && messages[messages.length - 1].role === 'user' && (
