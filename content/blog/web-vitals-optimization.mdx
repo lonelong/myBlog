@@ -1,0 +1,348 @@
+---
+title: "Web 性能指标优化实战：FCP / LCP / TTI / FID / CLS / TTFB"
+date: "2024-10-05"
+description: "逐个拆解六大 Web 性能指标的含义、测量方法和具体优化方案，用数据驱动性能提升"
+tags: ["性能优化", "Core Web Vitals", "前端", "Lighthouse"]
+cover: "/images/web-vitals.png"
+---
+
+## 指标全景
+
+```
+用户请求 → 服务器响应 → 首次渲染 → 内容可见 → 可交互 → 布局稳定
+    │          │           │          │         │         │
+    └─ TTFB ──┘    FCP ───┘   LCP ───┘  TTI ──┘  CLS ──┘
+                                          FID ──┘
+```
+
+## 1. TTFB — 服务器响应时间
+
+**Time to First Byte**：从请求发出到收到第一个字节的时间。
+
+```
+目标：< 800ms（Good）
+        800-1800ms（Needs Improvement）
+        > 1800ms（Poor）
+
+测量范围：
+  DNS 解析 + TCP 连接 + TLS 握手 + 服务器处理 + 网络传输
+```
+
+### 优化方案
+
+```
+① 使用 CDN（最直接）
+  用户 → 最近的 CDN 节点（5-50ms）
+  而不是 → 远端源服务器（200-500ms）
+
+② 服务端缓存
+  // Next.js ISR
+  export const revalidate = 3600  // 缓存 1 小时
+  // 命中缓存时 TTFB < 50ms
+
+③ 数据库查询优化
+  SELECT * FROM posts → 500ms  ❌
+  SELECT title, date FROM posts WHERE id = ? → 5ms  ✅
+  + 添加索引 + 连接池
+
+④ 流式 SSR（React 18）
+  传统 SSR: 等所有数据 → 生成完整 HTML → TTFB 高
+  流式 SSR: 先发 HTML 外壳 → TTFB 低 → 内容逐步推送
+
+⑤ Edge Computing
+  Vercel Edge Functions / Cloudflare Workers
+  代码在 CDN 边缘运行 → TTFB 极低
+```
+
+## 2. FCP — 首次内容绘制
+
+**First Contentful Paint**：浏览器首次渲染任何文本、图片或 SVG 的时间。
+
+```
+目标：< 1.8s
+
+时间线：
+  请求 → 白屏 → [FCP] 首个内容出现 → 完整内容加载
+```
+
+### 优化方案
+
+```
+① 消除渲染阻塞资源
+  <!-- ❌ 阻塞渲染 -->
+  <link rel="stylesheet" href="/large-styles.css">
+  <script src="/analytics.js"></script>
+
+  <!-- ✅ 异步加载非关键资源 -->
+  <link rel="stylesheet" href="/critical.css">
+  <link rel="stylesheet" href="/non-critical.css" media="print" onload="this.media='all'">
+  <script src="/analytics.js" defer></script>
+
+② 内联关键 CSS
+  <head>
+    <style>
+      /* 首屏需要的关键 CSS 直接内联 */
+      body { margin: 0; font-family: sans-serif; }
+      .hero { min-height: 100vh; }
+    </style>
+    <!-- 完整 CSS 异步加载 -->
+    <link rel="preload" href="/styles.css" as="style" onload="this.rel='stylesheet'">
+  </head>
+
+③ 使用 next/font 避免字体阻塞
+  // font-display: swap → 先用系统字体，自定义字体加载后切换
+  const inter = Inter({ subsets: ['latin'], display: 'swap' })
+
+④ 减小 HTML 体积
+  SSR 输出精简 HTML → 更快到达 → 更快解析 → 更快 FCP
+
+⑤ 预加载关键资源
+  <link rel="preload" href="/hero-image.webp" as="image">
+  <link rel="preload" href="/fonts/inter.woff2" as="font" crossorigin>
+```
+
+## 3. LCP — 最大内容绘制
+
+**Largest Contentful Paint**：最大可见内容元素完成渲染的时间。
+
+```
+目标：< 2.5s
+
+LCP 元素通常是：
+  - 大图片（hero banner）
+  - 大块文本
+  - 视频封面
+  - 大型 SVG
+```
+
+### 优化方案
+
+```
+① 优化 LCP 元素的加载
+  // 图片：使用 Next.js Image + priority
+  <Image src="/hero.jpg" priority sizes="100vw" />
+  // priority 会添加 <link rel="preload">
+
+  // 或手动 preload
+  <link rel="preload" as="image" href="/hero.webp"
+    imagesrcset="/hero-400.webp 400w, /hero-800.webp 800w"
+    imagesizes="100vw" />
+
+② 图片格式优化
+  JPEG: 100KB → WebP: 70KB → AVIF: 50KB
+  <picture>
+    <source srcset="/hero.avif" type="image/avif">
+    <source srcset="/hero.webp" type="image/webp">
+    <img src="/hero.jpg" alt="Hero">
+  </picture>
+
+③ 响应式图片（避免加载过大图片）
+  <img
+    srcset="hero-400.webp 400w, hero-800.webp 800w, hero-1200.webp 1200w"
+    sizes="(max-width: 768px) 100vw, 50vw"
+    src="hero-800.webp"
+  />
+  // 手机加载 400px 图，不加载 1200px 的大图
+
+④ 如果 LCP 是文本 → 优化字体加载
+  font-display: swap + preload 字体文件
+
+⑤ SSR / SSG 让内容直接在 HTML 中
+  CSR: HTML 空 → JS 下载执行 → 渲染内容 → LCP（慢）
+  SSR: HTML 含内容 → 直接渲染 → LCP（快）
+```
+
+## 4. FID — 首次输入延迟
+
+**First Input Delay**：用户首次交互到浏览器开始处理的延迟。
+
+```
+目标：< 100ms
+
+用户点击按钮
+     │
+     ├─ 主线程空闲 → 立即处理 → FID ≈ 0ms ✅
+     │
+     └─ 主线程正忙（执行 JS）→ 等待 → 才能处理 → FID = 等待时间 ❌
+```
+
+### 优化方案
+
+```
+① 减少主线程长任务
+  // ❌ 一次性处理大量数据
+  function processData() {
+    for (let i = 0; i < 100000; i++) { /* 耗时计算 */ }
+    // 主线程阻塞 200ms → FID 200ms
+  }
+
+  // ✅ 分片处理
+  function processDataChunked(data) {
+    const CHUNK_SIZE = 1000
+    let index = 0
+
+    function processChunk() {
+      const end = Math.min(index + CHUNK_SIZE, data.length)
+      for (let i = index; i < end; i++) { /* 处理 */ }
+      index = end
+
+      if (index < data.length) {
+        // 让出主线程，允许处理用户交互
+        requestIdleCallback(processChunk)
+      }
+    }
+    processChunk()
+  }
+
+② 代码分割减少首屏 JS
+  // 首屏不需要的模块延迟加载
+  const HeavyModule = lazy(() => import('./HeavyModule'))
+
+③ Web Worker 处理 CPU 密集任务
+  // worker.js
+  self.onmessage = (e) => {
+    const result = heavyComputation(e.data)
+    self.postMessage(result)
+  }
+
+  // main.js
+  const worker = new Worker('./worker.js')
+  worker.postMessage(data)  // 不阻塞主线程
+
+④ 第三方脚本延迟加载
+  <!-- ❌ 同步加载 → 阻塞主线程 -->
+  <script src="https://analytics.com/heavy.js"></script>
+
+  <!-- ✅ defer/async + 延迟初始化 -->
+  <script src="https://analytics.com/heavy.js" defer></script>
+```
+
+## 5. CLS — 累积布局偏移
+
+**Cumulative Layout Shift**：页面生命周期内所有意外布局偏移的累积分数。
+
+```
+目标：< 0.1
+
+什么导致 CLS：
+  ① 图片/视频没有设置尺寸 → 加载后撑开
+  ② 字体加载导致文字大小变化（FOUT）
+  ③ 动态插入内容（广告、弹窗）
+  ④ 异步加载的组件导致页面跳动
+```
+
+### 优化方案
+
+```
+① 图片/视频始终设置尺寸
+  <!-- ❌ 没有尺寸 → 加载前高度 0 → 加载后撑开 → CLS -->
+  <img src="/photo.jpg">
+
+  <!-- ✅ 设置宽高 → 浏览器预留空间 -->
+  <img src="/photo.jpg" width="800" height="600">
+
+  <!-- ✅ Next.js Image 自动处理 -->
+  <Image src="/photo.jpg" width={800} height={600} />
+
+  <!-- ✅ CSS aspect-ratio -->
+  <div style="aspect-ratio: 16/9">
+    <img src="/photo.jpg" style="width: 100%; height: 100%; object-fit: cover">
+  </div>
+
+② 字体优化避免 FOUT
+  // font-display: optional → 100ms 内没加载完就一直用系统字体
+  @font-face {
+    font-family: 'MyFont';
+    font-display: optional;  /* 不会导致文字重排 */
+    src: url('/fonts/myfont.woff2');
+  }
+
+  // 或 preload 确保尽快加载
+  <link rel="preload" href="/fonts/myfont.woff2" as="font" crossorigin>
+
+③ 为动态内容预留空间
+  // ❌ 广告加载后把内容往下推
+  <div>{ad && <AdBanner />}</div>  // 从 0 高度变成 250px
+
+  // ✅ 提前预留空间
+  <div style={{ minHeight: 250 }}>
+    {ad ? <AdBanner /> : <Skeleton height={250} />}
+  </div>
+
+④ 使用 transform 做动画
+  /* ❌ 改变布局属性 → 导致重排 → CLS */
+  .animate { top: 100px; left: 50px; }
+
+  /* ✅ transform 不影响布局 → 不产生 CLS */
+  .animate { transform: translate(50px, 100px); }
+```
+
+## 6. TTI — 完全可交互时间
+
+**Time to Interactive**：页面完全可以响应用户交互的时间。
+
+```
+目标：< 3.8s
+
+TTI 的判定标准：
+  1. FCP 已完成
+  2. 主要的事件处理器已注册
+  3. 主线程连续 5 秒内没有长任务（> 50ms）
+```
+
+### 优化方案
+
+```
+① 减少 JS Bundle 体积（最直接）
+  体积小 → 下载快 → 解析快 → 执行快 → TTI 低
+
+② 延迟非关键 JS
+  // 首屏不需要的功能延迟加载
+  // 聊天窗口、反馈按钮、分析脚本等
+  if ('requestIdleCallback' in window) {
+    requestIdleCallback(() => {
+      import('./analytics').then(m => m.init())
+      import('./chat-widget').then(m => m.mount())
+    })
+  }
+
+③ Progressive Hydration（渐进式水合）
+  // React 18 Suspense 实现
+  <Suspense fallback={<Skeleton />}>
+    <HeavyComponent />  // 延迟水合，不阻塞 TTI
+  </Suspense>
+
+④ 使用 Service Worker 预缓存
+  // 第二次访问时关键资源直接从缓存读取
+  // JS 文件零网络延迟 → TTI 大幅降低
+```
+
+## 测量工具
+
+```
+实验室数据（Lab）：
+  ├── Lighthouse（Chrome DevTools → Lighthouse 面板）
+  ├── WebPageTest（webpagetest.org）
+  └── PageSpeed Insights（pagespeed.web.dev）
+
+真实用户数据（Field / RUM）：
+  ├── Chrome UX Report (CrUX)
+  ├── web-vitals 库（自行采集）
+  └── 第三方 RUM 平台
+
+推荐工作流：
+  1. Lighthouse CI 集成到 CI/CD → 每次构建检查
+  2. web-vitals 库采集真实用户数据 → 上报分析
+  3. Chrome DevTools Performance 面板 → 定位具体问题
+```
+
+## 总结速查表
+
+| 指标 | 目标 | 核心优化 |
+|------|------|---------|
+| TTFB | < 800ms | CDN + 缓存 + Edge Computing |
+| FCP | < 1.8s | 消除渲染阻塞 + 内联关键 CSS + SSR |
+| LCP | < 2.5s | 预加载 LCP 元素 + 图片优化 + SSR |
+| FID | < 100ms | 减少长任务 + 代码分割 + Web Worker |
+| CLS | < 0.1 | 设置图片尺寸 + 预留空间 + transform 动画 |
+| TTI | < 3.8s | 减小 JS 体积 + 延迟非关键脚本 |

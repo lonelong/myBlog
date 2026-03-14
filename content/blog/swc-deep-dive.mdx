@@ -1,0 +1,303 @@
+---
+title: "SWC 深度解析：为什么它比 Babel 快 20 倍"
+date: "2024-10-08"
+description: "深入理解 SWC 的架构原理，为什么 Rust 编写的编译器能带来数量级的性能提升，以及如何在项目中使用"
+tags: ["SWC", "Babel", "编译器", "Rust", "工程化"]
+cover: "/images/swc.png"
+---
+
+## 什么是 SWC
+
+SWC（Speedy Web Compiler）是用 **Rust** 编写的 JavaScript/TypeScript 编译器，功能对标 Babel，但速度快 **20-70 倍**。
+
+```
+Babel（JavaScript 编写）：
+  编译 1000 个文件 → 30 秒
+
+SWC（Rust 编写）：
+  编译 1000 个文件 → 1.5 秒
+```
+
+SWC 已被 Next.js、Deno、Parcel 等主流工具采用为默认编译器。
+
+## 为什么 SWC 这么快
+
+### 1. Rust vs JavaScript 的性能差距
+
+```
+JavaScript (V8):
+  ├── 动态类型 → 运行时类型检查开销
+  ├── 垃圾回收 → GC 暂停影响性能
+  ├── JIT 编译 → 需要"预热"才能优化
+  └── 单线程 → 无法利用多核 CPU
+
+Rust:
+  ├── 静态类型 + 零成本抽象 → 编译时优化到极致
+  ├── 无 GC → 所有权系统管理内存，零运行时开销
+  ├── AOT 编译 → 直接编译为原生机器码
+  └── 原生多线程 → 完美利用多核 CPU
+```
+
+### 2. 更高效的 AST 处理
+
+```
+Babel 的 AST 处理：
+  源码 → parse → AST（JS 对象）→ transform → generate → 代码
+                   ↑
+              每个节点是一个 JS 对象
+              存在大量堆分配和 GC 压力
+
+SWC 的 AST 处理：
+  源码 → parse → AST（Arena 分配）→ transform → codegen → 代码
+                   ↑
+              Arena 分配：所有节点分配在连续内存中
+              一次性释放，无 GC 压力
+              CPU 缓存友好
+```
+
+### 3. 原生并行能力
+
+```
+Babel + thread-loader（模拟并行）：
+  主进程 → 创建 Worker 进程 → 序列化数据 → 传输 → Worker 执行 → 序列化结果 → 传回
+                                 ↑ 序列化开销大
+  实际加速: 2-4 倍（受进程间通信限制）
+
+SWC（原生并行）：
+  主线程 → 直接并行处理（共享内存，无序列化）
+  实际加速: 接近 CPU 核心数（8核 ≈ 8 倍）
+```
+
+## SWC 能做什么
+
+### 1. 编译（Transpilation）
+
+```javascript
+// 输入: 现代 JavaScript / TypeScript
+const greet = (name: string): string => `Hello, ${name}`
+const data = await fetch('/api')
+const items = [1, 2, ...rest]
+
+// SWC 输出: 兼容目标环境的 JavaScript
+var greet = function(name) { return "Hello, " + name }
+var data = yield fetch('/api')
+var items = [1, 2].concat(rest)
+```
+
+### 2. JSX 转换
+
+```javascript
+// 输入
+function App() {
+  return <div className="app"><h1>Hello</h1></div>
+}
+
+// SWC 输出 (automatic runtime)
+import { jsx as _jsx } from "react/jsx-runtime"
+function App() {
+  return _jsx("div", {
+    className: "app",
+    children: _jsx("h1", { children: "Hello" })
+  })
+}
+```
+
+### 3. 压缩（Minification）
+
+```javascript
+// SWC 内置了类似 Terser 的压缩能力
+// 输入
+function calculateTotal(items) {
+  let total = 0
+  for (const item of items) {
+    total += item.price * item.quantity
+  }
+  return total
+}
+
+// SWC 压缩输出
+function calculateTotal(t){let o=0;for(const l of t)o+=l.price*l.quantity;return o}
+```
+
+## 在各工具中使用 SWC
+
+### Next.js（默认使用）
+
+```javascript
+// next.config.js
+// Next.js 12+ 默认使用 SWC，无需额外配置
+
+module.exports = {
+  // SWC 相关配置
+  compiler: {
+    // 移除 console.log
+    removeConsole: process.env.NODE_ENV === 'production',
+
+    // styled-components 支持
+    styledComponents: true,
+
+    // emotion 支持
+    emotion: true,
+  },
+
+  // 如果需要自定义 SWC 配置
+  experimental: {
+    swcPlugins: [
+      ['@swc/plugin-styled-components', {}],
+    ],
+  },
+}
+```
+
+### Webpack（swc-loader）
+
+```javascript
+// webpack.config.js
+module.exports = {
+  module: {
+    rules: [
+      {
+        test: /\.(ts|tsx|js|jsx)$/,
+        exclude: /node_modules/,
+        use: {
+          loader: 'swc-loader',
+          options: {
+            jsc: {
+              parser: {
+                syntax: 'typescript',
+                tsx: true,
+                decorators: true,
+              },
+              transform: {
+                react: {
+                  runtime: 'automatic',  // React 17+ JSX transform
+                  development: process.env.NODE_ENV === 'development',
+                  refresh: true,  // Fast Refresh
+                },
+              },
+              target: 'es2020',
+            },
+            minify: process.env.NODE_ENV === 'production',
+          },
+        },
+      },
+    ],
+  },
+}
+```
+
+### Vite（@vitejs/plugin-react-swc）
+
+```javascript
+// vite.config.ts
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react-swc'
+
+export default defineConfig({
+  plugins: [
+    react({
+      // SWC 选项
+      tsDecorators: true,
+    }),
+  ],
+})
+```
+
+### 独立使用（CLI / API）
+
+```bash
+# CLI
+npx @swc/cli src -d dist --config-file .swcrc
+
+# 或编程使用
+npm install @swc/core
+```
+
+```javascript
+const swc = require('@swc/core')
+
+const output = await swc.transform(code, {
+  jsc: {
+    parser: { syntax: 'typescript', tsx: true },
+    target: 'es2020',
+  },
+  sourceMaps: true,
+})
+
+console.log(output.code)
+console.log(output.map)
+```
+
+## SWC vs Babel 配置对照
+
+```json
+// .babelrc
+{
+  "presets": [
+    ["@babel/preset-env", { "targets": "> 0.25%" }],
+    ["@babel/preset-react", { "runtime": "automatic" }],
+    "@babel/preset-typescript"
+  ],
+  "plugins": [
+    ["@babel/plugin-proposal-decorators", { "legacy": true }]
+  ]
+}
+```
+
+```json
+// .swcrc（等价配置）
+{
+  "jsc": {
+    "parser": {
+      "syntax": "typescript",
+      "tsx": true,
+      "decorators": true
+    },
+    "transform": {
+      "react": {
+        "runtime": "automatic"
+      },
+      "decoratorVersion": "2022-03"
+    },
+    "target": "es2020"
+  },
+  "env": {
+    "targets": "> 0.25%"
+  }
+}
+```
+
+## SWC 的局限性
+
+| 维度 | Babel | SWC |
+|------|-------|-----|
+| 速度 | 慢 | **快 20-70x** |
+| 插件生态 | **丰富**（1000+ 插件）| 有限（Rust 插件/WASM） |
+| 自定义转换 | 写 JS 插件即可 | 需要写 Rust 或 WASM |
+| 类型检查 | 不支持 | 不支持（和 Babel 一样） |
+| Polyfill | @babel/polyfill | 需要配合 core-js |
+| 宏（Macro）| babel-plugin-macros | 不支持 |
+
+## SWC vs esbuild vs Babel
+
+```
+              速度      生态       定制性     产物质量
+Babel         ★☆☆     ★★★★★    ★★★★★    ★★★★
+SWC           ★★★★    ★★★      ★★★       ★★★★
+esbuild       ★★★★★   ★★       ★★        ★★★
+
+选择建议：
+  需要最快速度 + 不需要特殊插件 → esbuild
+  需要较快速度 + 较好生态 → SWC（推荐）
+  需要特殊 Babel 插件 → 继续用 Babel
+```
+
+## 总结
+
+SWC 是前端编译工具的**性能革命**：
+
+1. **Rust 原生性能**：无 GC、AOT 编译、CPU 缓存友好
+2. **原生并行**：真正的多线程，不是进程间通信模拟
+3. **Next.js 默认**：已是 React 生态的标配编译器
+4. **功能对标 Babel**：编译、压缩、JSX 转换一站式
+5. **渐进式迁移**：可以在 Webpack/Vite 中替换 Babel，配置对等

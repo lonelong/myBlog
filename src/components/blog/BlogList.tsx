@@ -1,10 +1,12 @@
 'use client'
 
-import { useState } from 'react'
-import { Search } from 'lucide-react'
+import { useState, useMemo } from 'react'
+import { Search, ChevronDown, ChevronUp } from 'lucide-react'
 import BlogCard from './BlogCard'
 import Tag from '@/components/ui/Tag'
 import { BlogPost } from '@/types'
+
+const MAX_VISIBLE_TAGS = 20
 
 interface BlogListProps {
   posts: BlogPost[]
@@ -14,6 +16,19 @@ interface BlogListProps {
 export default function BlogList({ posts, tags }: BlogListProps) {
   const [search, setSearch] = useState('')
   const [activeTag, setActiveTag] = useState<string | null>(null)
+  const [showAllTags, setShowAllTags] = useState(false)
+
+  // Sort tags by article count (descending)
+  const sortedTags = useMemo(() => {
+    const tagCount = new Map<string, number>()
+    posts.forEach((post) =>
+      post.tags.forEach((tag) => tagCount.set(tag, (tagCount.get(tag) || 0) + 1))
+    )
+    return [...tags].sort((a, b) => (tagCount.get(b) || 0) - (tagCount.get(a) || 0))
+  }, [posts, tags])
+
+  const visibleTags = showAllTags ? sortedTags : sortedTags.slice(0, MAX_VISIBLE_TAGS)
+  const hasMoreTags = sortedTags.length > MAX_VISIBLE_TAGS
 
   const filtered = posts.filter((post) => {
     const matchesSearch =
@@ -48,7 +63,7 @@ export default function BlogList({ posts, tags }: BlogListProps) {
           onClick={() => setActiveTag(null)}
           size="md"
         />
-        {tags.map((tag) => (
+        {visibleTags.map((tag) => (
           <Tag
             key={tag}
             label={tag}
@@ -57,6 +72,15 @@ export default function BlogList({ posts, tags }: BlogListProps) {
             size="md"
           />
         ))}
+        {hasMoreTags && (
+          <button
+            onClick={() => setShowAllTags(!showAllTags)}
+            className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm border border-[var(--border)] text-[var(--text-secondary)] hover:text-[var(--accent)] hover:border-[var(--accent)] transition-colors"
+          >
+            {showAllTags ? '收起' : `更多 +${sortedTags.length - MAX_VISIBLE_TAGS}`}
+            {showAllTags ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+          </button>
+        )}
       </div>
 
       {/* Posts grid */}

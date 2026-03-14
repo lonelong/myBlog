@@ -1,0 +1,281 @@
+---
+title: "为什么 JS 会阻塞渲染？如何优化？"
+date: "2024-09-25"
+description: "从浏览器渲染原理出发，解释 JavaScript 为何阻塞页面渲染，以及 defer、async、Web Worker 等优化方案"
+tags: ["JavaScript", "浏览器", "渲染原理", "性能优化"]
+cover: "/images/js-blocking.png"
+---
+
+## 浏览器的单线程模型
+
+浏览器的**主线程**同时负责两件事：**执行 JS** 和 **渲染页面**。它们不能同时进行。
+
+```
+主线程时间线：
+  ─[JS执行]─[渲染]─[JS执行]─[渲染]─[JS执行]─[渲染]─
+             ↑                ↑                ↑
+          用户看到更新       用户看到更新      用户看到更新
+
+如果 JS 执行时间太长：
+  ─[════════ 长时间 JS 执行 ════════]─[渲染]─
+   ↑                                        ↑
+   开始执行                                  用户终于看到更新
+   这段时间页面完全卡死 😱
+```
+
+## 为什么 JS 必须阻塞渲染？
+
+因为 **JS 可以修改 DOM 和 CSSOM**。如果允许渲染和 JS 并行，会出现数据竞争：
+
+```javascript
+// 如果 JS 和渲染同时执行：
+document.body.style.background = 'red'   // JS 在改样式
+// 同时渲染引擎在用旧样式绘制 → 画面不一致！
+
+document.body.innerHTML = '<h1>Hello</h1>'  // JS 在改 DOM
+// 同时渲染引擎在布局旧 DOM → 崩溃！
+```
+
+所以浏览器的设计是：**JS 执行时，渲染暂停；渲染时，JS 暂停**。
+
+## HTML 解析中 JS 的阻塞行为
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <link rel="stylesheet" href="styles.css">  <!-- ① CSS 阻塞渲染 -->
+</head>
+<body>
+  <h1>Title</h1>
+  <p>Content above script</p>
+
+  <script src="app.js"></script>              <!-- ② JS 阻塞解析 + 渲染 -->
+
+  <p>Content below script</p>                 <!-- ③ 等 JS 执行完才解析 -->
+</body>
+</html>
+```
+
+```
+HTML 解析时间线：
+
+  解析 <h1> <p> ──→ 遇到 <script> ──→ 停止解析
+                                        │
+                              下载 app.js（如果是外部脚本）
+                                        │
+                              执行 app.js
+                                        │
+                              继续解析 <p>Content below...
+                                        │
+                              解析完成 → 渲染
+
+用户看到的：
+  0ms: 白屏
+  200ms: 看到 "Title" 和 "Content above script"
+  200-800ms: 等待 JS 下载和执行（页面卡住）
+  800ms: 看到 "Content below script"
+```
+
+### CSS 也会间接阻塞 JS
+
+```
+<link rel="stylesheet" href="styles.css">
+<script src="app.js"></script>
+
+时间线：
+  解析到 <link> → 开始下载 CSS
+  解析到 <script> → 需要执行 JS
+  但是！JS 可能会读取样式（getComputedStyle）
+  所以浏览器会等 CSS 下载完 → 才执行 JS → 才继续解析
+
+  CSS 下载 ─────────────────┐
+                            │ 等待
+  JS 等待 CSS ──────────────┤
+                            ▼
+  JS 执行 ─────────────────────
+                              │
+                              ▼ 继续解析
+```
+
+## 优化方案
+
+### 1. defer 和 async
+
+```html
+<!-- 普通 script：阻塞解析 -->
+<script src="app.js"></script>
+
+<!-- async：下载不阻塞，下载完立即执行（可能打断解析）-->
+<script async src="analytics.js"></script>
+
+<!-- defer：下载不阻塞，解析完成后按顺序执行 -->
+<script defer src="app.js"></script>
+```
+
+```
+普通 <script>:
+  HTML 解析 ──停── [下载JS] [执行JS] ──继续解析──
+
+async:
+  HTML 解析 ────────────────停── [执行JS] ──继续──
+              [下载JS（并行）]↗
+
+defer:
+  HTML 解析 ──────────────────────── 解析完成 ── [执行JS]
+              [下载JS（并行）]                    ↗
+```
+
+| 属性 | 下载时阻塞？ | 执行时阻塞？ | 执行时机 | 执行顺序 |
+|------|------------|------------|---------|---------|
+| 无 | ✅ 是 | ✅ 是 | 立即 | 按出现顺序 |
+| async | ❌ 否 | ✅ 是 | 下载完就执行 | 不保证顺序 |
+| defer | ❌ 否 | ✅ 是 | DOMContentLoaded 前 | **保证顺序** |
+
+```html
+<!-- 最佳实践 -->
+<head>
+  <!-- 关键 CSS 正常加载 -->
+  <link rel="stylesheet" href="critical.css">
+
+  <!-- 应用 JS 用 defer：不阻塞解析，按顺序执行 -->
+  <script defer src="vendor.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <!-- 第三方脚本用 async：不关心执行顺序 -->
+  <script async src="analytics.js"></script>
+  <script async src="ads.js"></script>
+</body>
+```
+
+### 2. 将脚本放在 body 底部
+
+```html
+<body>
+  <div id="app">
+    <!-- 页面内容先解析完毕 -->
+  </div>
+
+  <!-- JS 放在最后 → 不阻塞上面内容的解析和渲染 -->
+  <script src="app.js"></script>
+</body>
+```
+
+### 3. 代码分割减少首屏 JS
+
+```typescript
+// ❌ 首页加载所有页面代码
+import Home from './pages/Home'
+import Blog from './pages/Blog'
+import Chat from './pages/Chat'
+import Admin from './pages/Admin'
+// 全部打包到 bundle.js → 800KB → 主线程执行 300ms
+
+// ✅ 按需加载
+const Home = lazy(() => import('./pages/Home'))    // 首页: 100KB
+const Blog = lazy(() => import('./pages/Blog'))    // 进入时才加载
+const Chat = lazy(() => import('./pages/Chat'))    // 进入时才加载
+// 首屏 JS 只有 100KB → 主线程执行 50ms
+```
+
+### 4. Web Worker 处理 CPU 密集任务
+
+```javascript
+// ❌ 在主线程处理大量数据 → 阻塞渲染
+function processLargeData(data) {
+  // 耗时 500ms 的计算
+  return data.map(item => complexCalculation(item))
+}
+// 主线程: [══处理数据 500ms══][渲染] ← 页面卡 500ms
+
+// ✅ 放到 Web Worker → 不阻塞主线程
+// worker.js
+self.onmessage = (e) => {
+  const result = e.data.map(item => complexCalculation(item))
+  self.postMessage(result)
+}
+
+// main.js
+const worker = new Worker('./worker.js')
+worker.postMessage(largeData)
+worker.onmessage = (e) => {
+  setResult(e.data)  // 收到结果后更新 UI
+}
+// 主线程: [正常渲染][正常渲染][收到结果→更新] ← 不卡
+// Worker:  [══处理数据 500ms══]↗
+```
+
+### 5. 拆分长任务
+
+```javascript
+// ❌ 一个长任务阻塞 200ms
+function renderList(items) {
+  for (const item of items) {
+    renderItem(item)  // 10000 项 × 0.02ms = 200ms
+  }
+}
+
+// ✅ 用 requestIdleCallback / scheduler 拆分
+function renderListChunked(items) {
+  let i = 0
+  function renderChunk(deadline) {
+    while (i < items.length && deadline.timeRemaining() > 0) {
+      renderItem(items[i++])
+    }
+    if (i < items.length) {
+      requestIdleCallback(renderChunk)  // 下次空闲继续
+    }
+  }
+  requestIdleCallback(renderChunk)
+}
+// 主线程: [渲染50项][其他任务][渲染50项][其他任务]... ← 不卡
+```
+
+### 6. 使用 CSS 动画替代 JS 动画
+
+```css
+/* ✅ CSS 动画：由 GPU 合成线程执行，不阻塞主线程 */
+.slide-in {
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from { transform: translateX(-100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+/* 只有 transform 和 opacity 可以被 GPU 加速 */
+/* 其他属性（width, height, top, left）仍在主线程 */
+```
+
+```javascript
+// ❌ JS 动画：每帧都在主线程执行
+function animate() {
+  element.style.left = position + 'px'  // 触发重排
+  position += 1
+  requestAnimationFrame(animate)
+}
+
+// ✅ 用 transform 替代
+function animate() {
+  element.style.transform = `translateX(${position}px)`  // GPU 合成，不触发重排
+  position += 1
+  requestAnimationFrame(animate)
+}
+```
+
+## 总结
+
+```
+JS 阻塞渲染的根本原因：
+  主线程是单线程 → JS 和渲染互斥
+
+优化策略（按优先级）：
+  1. defer/async — 不阻塞 HTML 解析
+  2. 代码分割 — 减少首屏 JS 体积
+  3. SSR/SSG — 服务端渲染，不依赖客户端 JS
+  4. Web Worker — CPU 密集任务移出主线程
+  5. 拆分长任务 — requestIdleCallback / scheduler
+  6. CSS 动画 — GPU 加速，不占主线程
+```

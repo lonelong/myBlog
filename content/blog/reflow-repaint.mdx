@@ -1,0 +1,260 @@
+---
+title: "重排（Reflow）和重绘（Repaint）：为什么慢？如何减少？"
+date: "2024-09-18"
+description: "深入理解浏览器重排和重绘的触发机制、性能代价，以及减少重排重绘的实战方案"
+tags: ["浏览器", "渲染原理", "性能优化", "前端"]
+cover: "/images/reflow-repaint.png"
+---
+
+## 浏览器渲染管线
+
+要理解重排和重绘，先要理解浏览器的渲染管线：
+
+```
+DOM + CSSOM
+     │
+     ▼
+  Layout（布局/重排）
+  计算每个元素的位置和大小
+     │
+     ▼
+  Paint（绘制/重绘）
+  把元素的像素画到图层上
+     │
+     ▼
+  Composite（合成）
+  把多个图层合成最终画面
+```
+
+```
+完整管线: DOM → Style → Layout → Paint → Composite
+                        重排 ───→ 重绘 ───→ 合成
+                                 重绘 ───→ 合成（跳过重排）
+                                           合成（跳过重排和重绘）
+```
+
+## 什么是重排（Reflow / Layout）
+
+重排是浏览器重新计算元素的**几何属性**（位置、大小）的过程。
+
+### 触发重排的操作
+
+```javascript
+// ① 改变元素几何属性
+element.style.width = '200px'     // 宽度变了 → 自己和子元素都要重新布局
+element.style.height = '100px'
+element.style.padding = '10px'
+element.style.margin = '20px'
+element.style.border = '1px solid'
+element.style.top = '50px'       // position 元素
+element.style.fontSize = '16px'   // 字体大小影响布局
+
+// ② 改变 DOM 结构
+element.appendChild(newChild)     // 添加节点
+element.removeChild(child)        // 删除节点
+element.innerHTML = '...'         // 替换内容
+
+// ③ 读取布局信息（强制同步布局！）
+element.offsetWidth               // 读取宽度
+element.offsetHeight              // 读取高度
+element.offsetTop                 // 读取位置
+element.getBoundingClientRect()   // 读取几何信息
+element.scrollTop                 // 读取滚动位置
+element.clientWidth               // 读取可视宽度
+window.getComputedStyle(element)  // 读取计算样式
+
+// ④ 窗口变化
+window.resize                     // 窗口大小改变 → 所有元素重新布局
+```
+
+### 为什么重排很慢
+
+```
+重排的计算量：
+
+  改变一个元素的宽度：
+  1. 这个元素本身需要重新布局
+  2. 它的所有子元素需要重新布局
+  3. 它的兄弟元素可能需要重新布局（文档流）
+  4. 它的父元素可能需要重新布局（高度变化）
+  5. 整个页面可能需要重新布局（极端情况）
+
+  如果页面有 1000 个 DOM 节点：
+  一次重排可能涉及几百个节点的重新计算
+  耗时：1-50ms（取决于 DOM 复杂度）
+
+  如果在一个循环中触发 100 次重排：
+  100 × 10ms = 1000ms = 页面卡 1 秒 😱
+```
+
+## 什么是重绘（Repaint）
+
+重绘是浏览器重新绘制元素的**外观**（颜色、阴影等），但不改变布局。
+
+```javascript
+// 只触发重绘，不触发重排
+element.style.color = 'red'            // 颜色
+element.style.backgroundColor = 'blue' // 背景色
+element.style.visibility = 'hidden'    // 可见性（仍占空间）
+element.style.boxShadow = '0 0 5px'   // 阴影
+element.style.outline = '1px solid'    // 轮廓
+element.style.borderColor = 'green'    // 边框颜色
+element.style.opacity = '0.5'         // 透明度（如果不创建新层）
+```
+
+重绘比重排快，但仍有成本。
+
+## 合成（Composite）—— 最快的操作
+
+```javascript
+// 只触发合成，不触发重排和重绘
+element.style.transform = 'translateX(100px)'  // 移动
+element.style.transform = 'scale(1.5)'         // 缩放
+element.style.transform = 'rotate(45deg)'      // 旋转
+element.style.opacity = '0.5'                  // 透明度（独立图层时）
+element.style.willChange = 'transform'         // 提升为独立图层
+```
+
+为什么合成快？因为 **GPU 直接操作图层**，不需要 CPU 重新计算布局或重新绘制。
+
+```
+                CPU                          GPU
+重排: [计算布局] → [绘制像素] →           [合成图层]
+重绘:             [绘制像素] →           [合成图层]
+合成:                                    [合成图层] ← 最快
+```
+
+## 优化方案
+
+### 1. 批量修改样式
+
+```javascript
+// ❌ 逐条修改 → 可能触发多次重排
+element.style.width = '100px'
+element.style.height = '200px'
+element.style.margin = '10px'
+
+// ✅ 方案 1：用 cssText 一次修改
+element.style.cssText = 'width: 100px; height: 200px; margin: 10px;'
+
+// ✅ 方案 2：切换 class
+element.className = 'new-layout'
+
+// ✅ 方案 3：现代框架自动批量处理
+// React 的 setState 会合并更新，一次性操作 DOM
+```
+
+### 2. 避免读写交替（Layout Thrashing）
+
+```javascript
+// ❌ 读写交替 → N 次强制重排
+const items = document.querySelectorAll('.item')
+items.forEach(item => {
+  const height = item.offsetHeight     // 读 → 触发重排
+  item.style.height = height + 10 + 'px' // 写 → 使布局失效
+})
+
+// ✅ 批量读，然后批量写
+const heights = Array.from(items).map(item => item.offsetHeight)  // 统一读
+items.forEach((item, i) => {
+  item.style.height = heights[i] + 10 + 'px'  // 统一写
+})
+```
+
+### 3. 使用 transform 代替几何属性
+
+```css
+/* ❌ 改变 top/left → 每帧触发重排 */
+.move {
+  position: absolute;
+  transition: top 0.3s, left 0.3s;
+  top: 100px;
+  left: 200px;
+}
+
+/* ✅ 用 transform → 只触发合成 */
+.move {
+  transition: transform 0.3s;
+  transform: translate(200px, 100px);
+}
+```
+
+### 4. 离线 DOM 操作
+
+```javascript
+// ❌ 直接在文档中操作 → 每次 appendChild 都触发重排
+for (let i = 0; i < 1000; i++) {
+  const li = document.createElement('li')
+  li.textContent = `Item ${i}`
+  list.appendChild(li)  // 1000 次重排
+}
+
+// ✅ 方案 1：DocumentFragment
+const fragment = document.createDocumentFragment()
+for (let i = 0; i < 1000; i++) {
+  const li = document.createElement('li')
+  li.textContent = `Item ${i}`
+  fragment.appendChild(li)  // 不触发重排
+}
+list.appendChild(fragment)  // 只有 1 次重排
+
+// ✅ 方案 2：先隐藏，修改完再显示
+list.style.display = 'none'  // 1 次重排
+for (let i = 0; i < 1000; i++) {
+  list.appendChild(createItem(i))  // 不触发重排（元素不可见）
+}
+list.style.display = ''  // 1 次重排
+```
+
+### 5. will-change 提升图层
+
+```css
+/* 告诉浏览器这个元素即将变化，提前创建独立图层 */
+.animated-card {
+  will-change: transform, opacity;
+}
+
+/* 注意：不要滥用！每个图层都消耗内存 */
+/* ❌ * { will-change: transform; } */
+/* ✅ 只给真正需要动画的元素加 */
+```
+
+### 6. 虚拟列表减少 DOM 数量
+
+```
+DOM 节点越多 → 重排计算量越大
+
+10000 个列表项 → 10000 个 DOM 节点 → 重排 50ms
+虚拟列表 → 只有 20 个 DOM 节点 → 重排 0.5ms
+```
+
+## CSS 属性对渲染管线的影响速查
+
+```
+只触发合成（最快）：
+  transform, opacity, will-change
+
+触发重绘 + 合成（较快）：
+  color, background-color, visibility,
+  box-shadow, outline, border-color
+
+触发重排 + 重绘 + 合成（最慢）：
+  width, height, padding, margin, border-width,
+  top, left, right, bottom, position, display,
+  font-size, line-height, text-align, overflow,
+  float, clear
+```
+
+## 总结
+
+```
+性能排名：
+  合成（transform/opacity）> 重绘（color/background）> 重排（width/height）
+
+核心原则：
+  1. 用 transform 代替几何属性做动画
+  2. 批量读、批量写，避免读写交替
+  3. 减少 DOM 数量（虚拟列表）
+  4. 离线操作 DOM（DocumentFragment）
+  5. 合理使用 will-change 提升图层
+```

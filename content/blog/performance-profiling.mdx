@@ -1,0 +1,251 @@
+---
+title: "如何定位性能瓶颈？前端性能分析实战指南"
+date: "2024-09-22"
+description: "使用 Chrome DevTools、Lighthouse、React Profiler 等工具系统性定位前端性能瓶颈的完整方法论"
+tags: ["性能优化", "Chrome DevTools", "Lighthouse", "前端"]
+cover: "/images/profiling.png"
+---
+
+## 性能分析的核心原则
+
+> **Don't guess, measure.**（不要猜，要量。）
+
+性能优化的正确流程：**度量 → 分析 → 定位 → 优化 → 验证**。
+
+## 工具一：Lighthouse（全局扫描）
+
+Lighthouse 是第一步，给出整体性能评分和具体问题列表。
+
+```
+打开方式：
+  Chrome DevTools → Lighthouse 面板 → Analyze page load
+
+输出的六大分数：
+  Performance:    85  ← 性能
+  Accessibility:  92  ← 无障碍
+  Best Practices: 100 ← 最佳实践
+  SEO:           100  ← 搜索引擎优化
+  PWA:            -   ← 渐进式 Web 应用
+
+关键指标：
+  FCP: 1.2s ✅
+  LCP: 3.5s ❌ ← 超标！需要优化
+  TBT: 450ms ❌ ← 总阻塞时间过长
+  CLS: 0.02 ✅
+```
+
+### Lighthouse 的诊断建议
+
+```
+Opportunities（优化机会）：
+  ├── Eliminate render-blocking resources     节省 1.2s
+  │   └── styles.css 阻塞了渲染
+  ├── Properly size images                   节省 800ms
+  │   └── hero.jpg: 提供了 2400px，实际只需 800px
+  └── Reduce unused JavaScript               节省 600ms
+      └── vendor.js 中 60% 的代码未使用
+
+Diagnostics（诊断）：
+  ├── Avoid enormous network payloads: 总计 3.2MB
+  ├── Minimize main-thread work: 4.5s
+  └── Avoid long main-thread tasks: 3 个超过 50ms 的长任务
+```
+
+## 工具二：Performance 面板（精确定位）
+
+Performance 面板是定位具体瓶颈的核心工具。
+
+### 录制和分析
+
+```
+操作步骤：
+  1. 打开 DevTools → Performance 面板
+  2. 点击录制按钮（或 Ctrl+Shift+E）
+  3. 执行你要分析的操作（如页面加载、点击按钮）
+  4. 停止录制
+  5. 分析火焰图
+```
+
+### 火焰图解读
+
+```
+时间轴 →
+┌──────────────────────────────────────────────────────┐
+│ Network  │ [HTML] [CSS] [JS─────────] [Image──]      │
+├──────────┤                                           │
+│ Main     │ [Parse HTML] [Evaluate JS────────────]    │
+│ Thread   │              │ [Component render──]  │    │
+│          │              │ [useEffect──]         │    │
+│          │              │ [Layout]              │    │
+│          │              │ [Paint]               │    │
+├──────────┤                                           │
+│ Compositor│                    [Composite Layers]     │
+├──────────┤                                           │
+│ GPU      │                          [Draw]           │
+└──────────────────────────────────────────────────────┘
+
+红色标记 = Long Task（超过 50ms 的任务）← 重点关注！
+```
+
+### 定位长任务
+
+```
+长任务详情（点击红色条）：
+  Total Time: 180ms
+  Self Time: 5ms
+
+  Call Tree:
+    App (180ms)
+    └── SearchResults (170ms)
+        └── filterAndSort (165ms)  ← 瓶颈！
+            ├── Array.filter (80ms)
+            └── Array.sort (85ms)
+
+结论：filterAndSort 函数对大数组操作耗时 165ms
+方案：useMemo 缓存 / Web Worker / 虚拟列表
+```
+
+### 定位布局抖动
+
+```
+Performance 面板中的 Layout 事件：
+  Layout (forced) - 15ms
+    at recalculate_layout (app.js:234)
+    Nodes requiring layout: 1500
+
+如果看到紫色的 Layout 事件标注 "forced"：
+  → 代码中读写 DOM 交替 → 强制同步布局 → 性能差
+```
+
+## 工具三：React Profiler
+
+```
+操作步骤：
+  1. 安装 React DevTools 浏览器扩展
+  2. 打开 DevTools → Profiler 面板
+  3. 点击录制 → 操作页面 → 停止录制
+  4. 查看 Flamegraph 或 Ranked 视图
+
+分析结果：
+  ┌─ App (2.3ms)
+  │  ├─ Header (0.1ms) — 灰色 = 没有重渲染 ✅
+  │  ├─ SearchSection (1.8ms) — 黄色 = 渲染了
+  │  │  ├─ SearchInput (0.1ms)
+  │  │  └─ ResultList (1.5ms) — 橙色 = 渲染较慢 ⚠️
+  │  │     ├─ ResultItem ×200 (各 0.005ms)
+  │  │     └─ 总计: 200 个子组件全部重渲染
+  │  └─ Footer (0.1ms) — 灰色 ✅
+
+问题：ResultList 的 200 个子组件全部重渲染
+原因：父组件每次创建新的 items 数组引用
+方案：React.memo + useMemo
+```
+
+### "Why did this render?" 分析
+
+```
+Profiler 中点击某个组件 → 查看 "Why did this render?"
+
+可能的原因：
+  1. Props changed: items (array)
+     → 父组件每次创建新数组 → 用 useMemo
+  2. Props changed: onItemClick (function)
+     → 父组件每次创建新函数 → 用 useCallback
+  3. Parent rendered
+     → 父组件状态变化 → 用 React.memo 包裹子组件
+  4. Hooks changed: useContext(ThemeContext)
+     → Context 值变化 → 拆分 Context
+```
+
+## 工具四：Coverage 面板（代码覆盖率）
+
+```
+打开方式：
+  DevTools → Ctrl+Shift+P → 输入 "Coverage" → Show Coverage
+
+分析结果：
+  URL                          Type    Total    Unused
+  bundle.js                    JS      800KB    480KB (60%)  ❌
+  vendor.js                    JS      300KB    210KB (70%)  ❌
+  styles.css                   CSS     50KB     30KB  (60%)
+
+60% 的 JS 代码在首屏没有使用！
+→ 代码分割 + Tree Shaking + 按需加载
+```
+
+## 工具五：Network 面板
+
+```
+关注点：
+  1. 瀑布流（Waterfall）：资源加载是否有阻塞
+  2. 文件大小：是否有过大的资源
+  3. 请求数量：是否可以合并
+  4. 缓存命中：是否有效利用缓存
+
+过滤技巧：
+  - 勾选 "Disable cache" 模拟首次访问
+  - 选择 "Slow 3G" 模拟弱网
+  - 按 Size 排序找最大的文件
+  - 按 Time 排序找最慢的请求
+```
+
+## 工具六：Memory 面板
+
+```
+打开方式：DevTools → Memory 面板
+
+三种快照模式：
+  1. Heap Snapshot：当前内存中的对象
+  2. Allocation Timeline：一段时间内的内存分配
+  3. Allocation Sampling：采样统计
+
+内存泄漏检测：
+  1. 录制快照 A
+  2. 执行某个操作（如打开/关闭弹窗）
+  3. 录制快照 B
+  4. 对比 A 和 B：如果 B 比 A 多了不该有的对象 → 泄漏
+
+常见泄漏：
+  - 未清理的定时器 / 事件监听
+  - 闭包持有大对象引用
+  - 分离的 DOM 节点（Detached DOM tree）
+```
+
+## 系统性分析流程
+
+```
+Step 1: Lighthouse 全局扫描
+  → 得到整体评分和优化建议
+  → 确定优化方向
+
+Step 2: Performance 录制
+  → 找到 Long Tasks（红色标记）
+  → 火焰图定位具体函数
+
+Step 3: React Profiler
+  → 找到不必要的重渲染
+  → 分析重渲染原因
+
+Step 4: Network 分析
+  → 检查资源大小和加载顺序
+  → 确认缓存是否生效
+
+Step 5: Coverage 检查
+  → 找出未使用的代码
+  → 指导代码分割策略
+
+Step 6: 优化并验证
+  → 实施优化方案
+  → 重新 Lighthouse 对比分数变化
+```
+
+## 总结
+
+| 工具 | 用途 | 定位什么 |
+|------|------|---------|
+| Lighthouse | 全局评分 | 整体问题方向 |
+| Performance | 运行时分析 | 长任务、布局抖动 |
+| React Profiler | 组件分析 | 不必要的重渲染 |
+| Coverage | 代码覆盖 | 未使用的代码 |
+| Network | 网络分析 | 资源大小、加载顺序 |
+| Memory | 内存分析 | 内存泄漏 |

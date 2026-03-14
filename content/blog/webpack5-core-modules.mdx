@@ -1,0 +1,374 @@
+---
+title: "Webpack 5 源码核心模块解析：从入口到产物"
+date: "2024-10-18"
+description: "拆解 Webpack 5 源码中的核心模块，理解 Compiler、Compilation、Module、Chunk、Plugin 等关键概念的职责和关系"
+tags: ["Webpack", "源码", "工程化", "前端"]
+cover: "/images/webpack-modules.png"
+---
+
+## Webpack 5 的模块全景
+
+```
+                    Webpack 核心模块关系图
+
+  ┌─────────────────────────────────────────────────────┐
+  │                     Compiler                         │
+  │  （全局唯一，管理整个构建生命周期）                        │
+  │                                                      │
+  │  ┌────────────────────────────────────────────────┐  │
+  │  │                Compilation                      │  │
+  │  │  （每次构建的上下文，HMR 时会创建新的）              │  │
+  │  │                                                 │  │
+  │  │  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │  │
+  │  │  │ Module    │  │ Module   │  │ Module       │  │  │
+  │  │  │ (entry)  │──│ (dep A) │──│ (dep B)      │  │  │
+  │  │  └──────────┘  └──────────┘  └──────────────┘  │  │
+  │  │       │                                         │  │
+  │  │       ▼ seal（封装阶段）                          │  │
+  │  │  ┌──────────┐  ┌──────────┐                     │  │
+  │  │  │ Chunk     │  │ Chunk    │                     │  │
+  │  │  │ (main)   │  │ (vendor) │                     │  │
+  │  │  └──────────┘  └──────────┘                     │  │
+  │  │       │                                         │  │
+  │  │       ▼ emit（输出阶段）                          │  │
+  │  │  ┌──────────┐  ┌──────────┐                     │  │
+  │  │  │ Asset     │  │ Asset    │                     │  │
+  │  │  │ main.js  │  │ vendor.js│                     │  │
+  │  │  └──────────┘  └──────────┘                     │  │
+  │  └────────────────────────────────────────────────┘  │
+  │                                                      │
+  │  ┌──────────────────────────┐                        │
+  │  │ Plugin System (Tapable)   │                        │
+  │  │ 贯穿整个流程的钩子系统       │                        │
+  │  └──────────────────────────┘                        │
+  └─────────────────────────────────────────────────────┘
+```
+
+## 1. Compiler — 构建的总指挥
+
+**职责**：全局唯一的编译器实例，管理整个构建的生命周期。
+
+```javascript
+// Webpack 内部创建 Compiler 的流程
+const webpack = require('webpack')
+const config = require('./webpack.config.js')
+
+// webpack(config) 内部：
+function webpack(config) {
+  // 1. 创建 Compiler 实例
+  const compiler = new Compiler(config.context)
+
+  // 2. 注册所有内置插件
+  new WebpackOptionsApply().process(config, compiler)
+
+  // 3. 注册用户配置的插件
+  for (const plugin of config.plugins) {
+    plugin.apply(compiler)  // 每个插件调用 apply 注册钩子
+  }
+
+  return compiler
+}
+```
+
+### Compiler 的关键钩子
+
+```javascript
+class Compiler extends Tapable {
+  hooks = {
+    // 构建开始前
+    beforeRun:    new AsyncSeriesHook(['compiler']),
+    run:          new AsyncSeriesHook(['compiler']),
+
+    // 编译阶段
+    beforeCompile: new AsyncSeriesHook(['params']),
+    compile:       new SyncHook(['params']),
+    thisCompilation: new SyncHook(['compilation', 'params']),
+    compilation:   new SyncHook(['compilation', 'params']),
+    make:          new AsyncParallelHook(['compilation']),  // 核心：触发模块构建
+
+    // 完成阶段
+    afterCompile:  new AsyncSeriesHook(['compilation']),
+    emit:          new AsyncSeriesHook(['compilation']),    // 输出文件前
+    afterEmit:     new AsyncSeriesHook(['compilation']),    // 输出文件后
+    done:          new AsyncSeriesHook(['stats']),          // 构建完成
+  }
+}
+```
+
+## 2. Compilation — 单次构建的上下文
+
+**职责**：管理一次完整的模块构建过程。开发模式下每次 HMR 热更新都会创建新的 Compilation。
+
+```javascript
+class Compilation extends Tapable {
+  constructor(compiler) {
+    this.compiler = compiler
+    this.modules = new Set()        // 所有模块
+    this.chunks = new Set()         // 所有代码块
+    this.assets = {}                // 最终输出的文件
+    this.entries = new Map()        // 入口点
+    this.dependencyFactories = new Map()  // 依赖工厂
+    this.moduleGraph = new ModuleGraph()  // 模块依赖图
+    this.chunkGraph = new ChunkGraph()    // Chunk 关系图
+  }
+
+  // 核心方法
+  addModule(module) { }    // 添加模块到构建
+  buildModule(module) { }  // 执行 Loader 转换
+  processModuleDependencies(module) { }  // 解析模块依赖
+  seal() { }               // 封装：Module → Chunk
+  emitAsset(file, source) { }  // 输出产物
+}
+```
+
+### Compilation 的关键钩子
+
+```javascript
+hooks = {
+  buildModule:       new SyncHook(['module']),       // 开始构建模块
+  succeedModule:     new SyncHook(['module']),       // 模块构建成功
+  seal:              new SyncHook([]),                // 开始封装
+  optimizeModules:   new SyncBailHook(['modules']),  // 优化模块
+  optimizeChunks:    new SyncBailHook(['chunks']),   // 优化 Chunk
+  optimizeTree:      new AsyncSeriesHook(['chunks', 'modules']), // 优化依赖树
+  processAssets:     new AsyncSeriesHook(['assets']), // 处理产物（Webpack 5 新增）
+}
+```
+
+## 3. Module — 模块的抽象
+
+**职责**：每个文件对应一个 Module 实例，记录文件的源码、依赖和转换结果。
+
+```javascript
+// Webpack 的 Module 家族
+Module (基类)
+  ├── NormalModule      // 普通模块（.js, .ts, .css 等文件）
+  ├── RawModule         // 无需处理的原始模块
+  ├── ContextModule     // require.context() 动态导入
+  ├── ExternalModule    // externals 外部模块
+  └── ConcatenatedModule // Scope Hoisting 合并后的模块
+```
+
+### NormalModule 的构建流程
+
+```javascript
+class NormalModule extends Module {
+  constructor({ resource, loaders, parser, generator }) {
+    this.resource = resource    // 文件路径：/src/App.tsx
+    this.loaders = loaders      // 需要执行的 Loader 列表
+    this._source = null         // Loader 转换后的源码
+    this.dependencies = []      // 该模块的依赖列表
+  }
+
+  // 构建流程
+  async build(options, compilation) {
+    // 1. 执行 Loader 链（从右到左）
+    //    App.tsx → swc-loader → JavaScript 源码
+    const source = await this.runLoaders()
+    this._source = source
+
+    // 2. 使用 Parser 解析源码，提取依赖
+    //    分析 import/require 语句 → 生成依赖列表
+    const ast = parser.parse(source)
+    this.dependencies = parser.extractDependencies(ast)
+    // dependencies: ['react', './components/Header', './styles.css']
+
+    // 3. 递归处理每个依赖 → 再次 build → 形成依赖图
+  }
+}
+```
+
+## 4. ModuleFactory — 模块创建工厂
+
+**职责**：根据依赖类型创建对应的 Module 实例。
+
+```javascript
+// NormalModuleFactory：创建普通模块
+class NormalModuleFactory extends Tapable {
+  create(data, callback) {
+    const { dependency } = data
+
+    // 1. resolve：解析文件路径
+    //    'react' → /node_modules/react/index.js
+    //    './Header' → /src/components/Header.tsx
+    this.hooks.resolve.callAsync(data, (err, result) => {
+      const { resource, loaders } = result
+
+      // 2. 创建 NormalModule 实例
+      const module = new NormalModule({
+        resource,       // /src/components/Header.tsx
+        loaders,        // [swc-loader, css-loader, ...]
+        parser: this.getParser(result.type),
+        generator: this.getGenerator(result.type),
+      })
+
+      callback(null, module)
+    })
+  }
+}
+```
+
+## 5. Chunk & ChunkGroup — 代码分块
+
+**职责**：把模块组织成可输出的代码块。
+
+```javascript
+// Module → Chunk 的映射关系
+class Chunk {
+  constructor(name) {
+    this.name = name          // 'main', 'vendors', 'async-page'
+    this.files = new Set()    // 最终输出的文件名
+    this.idNameHints = new Set()
+  }
+}
+
+// 代码分割的三种方式：
+// 1. Entry：每个入口生成一个 Chunk
+entry: {
+  main: './src/index.js',     // → main chunk
+  admin: './src/admin.js',    // → admin chunk
+}
+
+// 2. 动态导入：每个 import() 生成一个 Chunk
+const Page = lazy(() => import('./Page'))  // → async chunk
+
+// 3. SplitChunks：自动提取共享模块
+optimization: {
+  splitChunks: { chunks: 'all' }  // → vendors chunk, commons chunk
+}
+```
+
+## 6. Tapable — 插件系统的基石
+
+**职责**：提供发布-订阅模式的钩子系统，是所有 Plugin 的通信桥梁。
+
+```javascript
+const { SyncHook, AsyncSeriesHook, SyncBailHook } = require('tapable')
+
+// 钩子类型
+SyncHook         // 同步串行，不关心返回值
+SyncBailHook     // 同步串行，返回非 undefined 则中断
+SyncWaterfallHook // 同步串行，上一个的返回值传给下一个
+AsyncSeriesHook  // 异步串行
+AsyncParallelHook // 异步并行
+
+// 用法
+const hook = new SyncHook(['arg1', 'arg2'])
+hook.tap('PluginA', (arg1, arg2) => { /* ... */ })  // 注册
+hook.call('hello', 'world')                          // 触发
+```
+
+### 插件如何接入
+
+```javascript
+class MyPlugin {
+  apply(compiler) {
+    // 在 emit 钩子上注册
+    compiler.hooks.emit.tapAsync('MyPlugin', (compilation, callback) => {
+      // compilation.assets 包含所有即将输出的文件
+      const assets = compilation.assets
+
+      // 添加一个新文件
+      compilation.emitAsset('build-info.json', new RawSource(
+        JSON.stringify({ buildTime: new Date().toISOString() })
+      ))
+
+      callback()
+    })
+  }
+}
+```
+
+## 7. Resolver — 路径解析器
+
+**职责**：把模块标识符解析为绝对路径。
+
+```javascript
+// Resolver 的解析策略
+import React from 'react'
+// → 查找 node_modules/react/package.json
+// → 读取 main/module/browser 字段
+// → 解析为 /node_modules/react/index.js
+
+import Header from './Header'
+// → 依次尝试 ./Header.tsx → ./Header.ts → ./Header.js
+// → 解析为 /src/components/Header.tsx
+
+import '@/utils/format'
+// → alias 映射 @ → /src
+// → 解析为 /src/utils/format.ts
+```
+
+## 8. Parser & Generator — 解析与生成
+
+```javascript
+// Parser：解析源码，提取依赖
+class JavascriptParser {
+  parse(source) {
+    const ast = acorn.parse(source)  // 生成 AST
+
+    // 遍历 AST，识别依赖声明
+    walk(ast, {
+      ImportDeclaration(node) {
+        // import x from 'y' → 添加依赖 'y'
+        this.addDependency(new HarmonyImportDependency(node.source.value))
+      },
+      CallExpression(node) {
+        if (node.callee.name === 'require') {
+          // require('z') → 添加依赖 'z'
+          this.addDependency(new CommonJsDependency(node.arguments[0].value))
+        }
+        if (node.callee.type === 'Import') {
+          // import('w') → 添加异步依赖 'w'
+          this.addDependency(new ImportDependency(node.arguments[0].value))
+        }
+      },
+    })
+  }
+}
+
+// Generator：根据 Module 生成最终代码
+class JavascriptGenerator {
+  generate(module, context) {
+    // 将模块代码包装成 Webpack 运行时格式
+    // import → __webpack_require__
+    // export → __webpack_exports__
+    return new RawSource(transformedCode)
+  }
+}
+```
+
+## 模块关系总结
+
+```
+Compiler（总指挥，全局唯一）
+  │
+  ├── 拥有 Compilation（每次构建一个）
+  │     │
+  │     ├── 使用 NormalModuleFactory 创建 Module
+  │     │     │
+  │     │     ├── Resolver：解析路径
+  │     │     ├── Loader Runner：执行 Loader 转换
+  │     │     └── Parser：提取依赖
+  │     │
+  │     ├── 构建 ModuleGraph（模块依赖图）
+  │     │
+  │     ├── seal()：Module → Chunk → ChunkGroup
+  │     │
+  │     └── emitAssets()：Chunk → Asset → 写入磁盘
+  │
+  └── Tapable 钩子系统贯穿全程
+        │
+        └── Plugin 通过钩子参与各个阶段
+```
+
+| 模块 | 职责 | 一句话 |
+|------|------|--------|
+| Compiler | 管理构建生命周期 | "总指挥" |
+| Compilation | 管理单次构建 | "施工队" |
+| Module | 表示一个文件 | "建筑材料" |
+| Chunk | 模块的分组 | "一车材料" |
+| Tapable | 钩子系统 | "通信系统" |
+| Resolver | 路径解析 | "导航员" |
+| Parser | 源码分析 | "质检员" |
+| NormalModuleFactory | 创建模块 | "材料工厂" |

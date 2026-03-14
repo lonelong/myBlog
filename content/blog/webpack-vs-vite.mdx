@@ -1,0 +1,277 @@
+---
+title: "Webpack vs Vite：构建工具深度对比与选型指南"
+date: "2024-10-12"
+description: "从架构原理、开发体验、生产构建、生态系统四个维度深度对比 Webpack 和 Vite"
+tags: ["Webpack", "Vite", "构建工具", "工程化"]
+cover: "/images/webpack-vs-vite.png"
+---
+
+## 核心架构差异
+
+```
+Webpack（Bundle-based）：
+  所有模块 → 打包成 bundle → 提供给浏览器
+  启动时必须处理全部模块
+
+Vite（ESM-based）：
+  浏览器请求哪个模块 → 实时编译那个模块 → 返回
+  启动时几乎不做事
+```
+
+### Webpack 开发模式流程
+
+```
+npm run dev
+     │
+     ▼
+┌─────────────────────────┐
+│ 1. 从入口开始             │
+│ 2. 递归解析所有依赖        │    耗时：10-60s
+│ 3. 执行所有 Loader        │    （取决于项目规模）
+│ 4. 打包成 bundle.js      │
+│ 5. 启动 dev server       │
+└────────────┬────────────┘
+             │
+             ▼
+  浏览器加载 bundle.js → 页面可用
+```
+
+### Vite 开发模式流程
+
+```
+npm run dev
+     │
+     ▼
+┌─────────────────────────┐
+│ 1. 预构建 node_modules   │    耗时：2-5s（esbuild，极快）
+│    (esbuild 处理)        │    且有缓存，第二次秒启
+│ 2. 启动 dev server       │
+└────────────┬────────────┘
+             │
+             ▼
+  浏览器请求 index.html
+  │
+  ├── <script type="module" src="/src/main.tsx">
+  │      浏览器发起请求 /src/main.tsx
+  │      │
+  │      ▼ Vite 拦截，实时编译
+  │      main.tsx → 编译 → 返回 JS
+  │
+  ├── import App from './App.tsx'
+  │      浏览器又发起请求 /src/App.tsx
+  │      │
+  │      ▼ Vite 拦截，实时编译
+  │      App.tsx → 编译 → 返回 JS
+  │
+  └── ...按需编译，只处理实际请求的模块
+```
+
+## 开发体验对比
+
+### 冷启动速度
+
+```
+项目规模: 1000 个模块
+
+Webpack:
+  首次启动: 30-60s（处理所有模块）
+  有缓存: 5-15s
+
+Vite:
+  首次启动: 1-3s（只预构建 node_modules）
+  有缓存: 0.5s
+```
+
+### HMR 热更新速度
+
+```
+修改一个组件文件后：
+
+Webpack HMR:
+  检测变化 → 重新编译变化的模块 → 重新打包受影响的 chunk → 推送到浏览器
+  耗时: 1-10s（取决于 chunk 大小）
+  项目越大越慢
+
+Vite HMR:
+  检测变化 → 编译该单个模块 → 通过 WebSocket 推送模块 URL → 浏览器重新请求
+  耗时: <50ms（恒定，不受项目大小影响）
+  O(1) 复杂度
+```
+
+### Vite 为什么这么快
+
+```
+关键：利用了浏览器原生 ES Module
+
+传统（Webpack）：
+  import A from './A'  →  webpack 打包  →  bundle.js  →  浏览器执行
+
+Vite 开发模式：
+  import A from './A'  →  浏览器直接发请求  →  Vite 实时编译返回  →  浏览器执行
+
+  浏览器变成了"模块加载器"，Vite 只是一个"按需编译服务器"
+```
+
+## 生产构建对比
+
+```
+Webpack 生产构建：
+  使用 Webpack 自身打包
+  Terser/SWC 压缩
+  成熟的代码分割
+  丰富的优化插件
+
+Vite 生产构建：
+  使用 Rollup 打包（不是 ESM 模式）
+  esbuild/Terser 压缩
+  Rollup 的代码分割
+  Rollup 插件生态
+
+注意：Vite 生产构建用的是 Rollup，不是开发时的 ESM 模式
+因为：
+  1. 浏览器 ESM 加载网络请求太多（瀑布流问题）
+  2. 生产需要 Tree Shaking、压缩、分割等优化
+  3. Rollup 的产物比 Webpack 更干净
+```
+
+### 产物体积对比
+
+```
+同一个 React 项目：
+
+Webpack 5 产物:
+  main.js:     145KB (gzipped: 45KB)
+  vendors.js:   89KB (gzipped: 28KB)
+  total:       234KB (gzipped: 73KB)
+
+Vite (Rollup) 产物:
+  index.js:    138KB (gzipped: 42KB)
+  vendor.js:    85KB (gzipped: 26KB)
+  total:       223KB (gzipped: 68KB)
+
+Rollup 产物通常略小（更好的 Tree Shaking + 更少的运行时代码）
+```
+
+## 配置复杂度对比
+
+### Webpack 配置
+
+```javascript
+// webpack.config.js — 典型的完整配置
+const path = require('path')
+const HtmlWebpackPlugin = require('html-webpack-plugin')
+const MiniCssExtractPlugin = require('mini-css-extract-plugin')
+const TerserPlugin = require('terser-webpack-plugin')
+
+module.exports = {
+  entry: './src/index.tsx',
+  output: {
+    path: path.resolve(__dirname, 'dist'),
+    filename: '[name].[contenthash].js',
+    clean: true,
+  },
+  module: {
+    rules: [
+      {
+        test: /\.(ts|tsx)$/,
+        use: 'swc-loader',
+        exclude: /node_modules/,
+      },
+      {
+        test: /\.css$/,
+        use: [MiniCssExtractPlugin.loader, 'css-loader', 'postcss-loader'],
+      },
+      {
+        test: /\.(png|jpg|gif|svg)$/,
+        type: 'asset',
+      },
+    ],
+  },
+  plugins: [
+    new HtmlWebpackPlugin({ template: './index.html' }),
+    new MiniCssExtractPlugin({ filename: '[name].[contenthash].css' }),
+  ],
+  resolve: {
+    extensions: ['.tsx', '.ts', '.js'],
+    alias: { '@': path.resolve(__dirname, 'src') },
+  },
+  optimization: {
+    minimizer: [new TerserPlugin({ parallel: true })],
+    splitChunks: { chunks: 'all' },
+  },
+}
+// 50+ 行配置
+```
+
+### Vite 配置
+
+```javascript
+// vite.config.ts — 同等功能
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react-swc'
+import path from 'path'
+
+export default defineConfig({
+  plugins: [react()],
+  resolve: {
+    alias: { '@': path.resolve(__dirname, 'src') },
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: { vendor: ['react', 'react-dom'] },
+      },
+    },
+  },
+})
+// 15 行配置，大部分功能是默认的
+```
+
+## 生态系统对比
+
+| 维度 | Webpack | Vite |
+|------|---------|------|
+| Loader/Plugin 数量 | 10000+ | 1000+（Rollup 兼容） |
+| 企业级项目验证 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
+| 微前端支持 | Module Federation | 有社区方案 |
+| SSR 支持 | 需要配置 | 原生支持 |
+| 老浏览器兼容 | 完善 | @vitejs/plugin-legacy |
+| CSS 模块化 | 需要 loader | 原生支持 |
+| TypeScript | 需要 loader | 原生支持（esbuild） |
+| 环境变量 | DefinePlugin | 原生支持 |
+
+## 选型建议
+
+```
+选 Webpack：
+  ├── 大型企业项目（需要 Module Federation 微前端）
+  ├── 需要高度自定义构建流程
+  ├── 已有 Webpack 项目（迁移成本高）
+  ├── 需要特定 Webpack Loader/Plugin
+  └── 对老浏览器兼容要求高
+
+选 Vite：
+  ├── 新项目（默认选择）
+  ├── 中小型项目
+  ├── 对开发体验要求高（启动快、HMR 快）
+  ├── React/Vue/Svelte 项目
+  └── 追求简洁配置
+
+选 Next.js (Turbopack)：
+  ├── React 全栈项目
+  ├── 需要 SSR/SSG
+  └── 追求最佳 React 开发体验
+```
+
+## 总结
+
+| 维度 | Webpack 5 | Vite |
+|------|-----------|------|
+| 冷启动 | 慢（全量打包）| **快**（ESM 按需）|
+| HMR | 随项目变慢 | **恒定快** |
+| 生产构建 | 成熟稳定 | Rollup（略快） |
+| 配置量 | 多 | **少** |
+| 生态 | **最丰富** | 快速增长 |
+| 学习曲线 | 陡 | **平缓** |
+
+新项目推荐 Vite，存量大型项目继续 Webpack 5 + 缓存优化。

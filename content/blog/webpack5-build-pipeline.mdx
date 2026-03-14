@@ -1,0 +1,343 @@
+---
+title: "Webpack 5 构建主流程线：从 Entry 到 Output 的完整链路"
+date: "2024-10-15"
+description: "从源码层面追踪 Webpack 5 构建的完整流程线，理解初始化、编译、封装、输出四大阶段的每一步"
+tags: ["Webpack", "源码", "构建流程", "工程化"]
+cover: "/images/webpack-pipeline.png"
+---
+
+## 构建流程全景
+
+```
+webpack(config)
+     │
+     ▼
+┌─────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│  初始化阶段   │ ──▶ │   编译阶段     │ ──▶ │   封装阶段     │ ──▶ │   输出阶段     │
+│ Initialize  │     │   Make       │     │   Seal       │     │   Emit       │
+│             │     │              │     │              │     │              │
+│ 创建Compiler│     │ 模块构建      │     │ Module→Chunk │     │ 写入文件系统   │
+│ 注册插件     │     │ 依赖解析      │     │ 代码优化      │     │ 生成产物      │
+│ 合并配置     │     │ Loader转换   │     │ Tree Shaking │     │              │
+└─────────────┘     └──────────────┘     └──────────────┘     └──────────────┘
+```
+
+## 第一阶段：初始化（Initialize）
+
+```javascript
+// 入口：用户调用 webpack(config)
+
+function webpack(config) {
+  // 1. 合并配置（用户配置 + 默认配置）
+  const mergedConfig = mergeWithDefaults(config)
+
+  // 2. 创建 Compiler 实例
+  const compiler = new Compiler(mergedConfig.context)
+  compiler.options = mergedConfig
+
+  // 3. 注册 Node 环境插件
+  new NodeEnvironmentPlugin().apply(compiler)
+
+  // 4. 注册用户配置的所有 Plugin
+  if (mergedConfig.plugins) {
+    for (const plugin of mergedConfig.plugins) {
+      plugin.apply(compiler)  // 每个插件在这里注册钩子
+    }
+  }
+
+  // 5. 根据 config 注册内置插件
+  //    EntryPlugin — 处理入口
+  //    ExternalsPlugin — 处理外部模块
+  //    SplitChunksPlugin — 代码分割
+  //    ...共 30+ 个内置插件
+  compiler.hooks.environment.call()
+  new WebpackOptionsApply().process(mergedConfig, compiler)
+
+  return compiler
+}
+
+// 6. 调用 compiler.run() 开始构建
+compiler.run((err, stats) => {
+  console.log(stats.toString())
+})
+```
+
+```
+初始化阶段的钩子触发顺序：
+  environment → afterEnvironment → entryOption →
+  afterPlugins → afterResolvers → beforeRun → run
+```
+
+## 第二阶段：编译（Make）
+
+这是最核心的阶段——**从入口文件出发，递归构建所有模块**。
+
+```
+compiler.hooks.make 触发
+        │
+        ▼
+  ┌─────────────────────────────────────────────┐
+  │           EntryPlugin 开始处理入口              │
+  │  compilation.addEntry('./src/index.tsx')     │
+  └──────────────────┬──────────────────────────┘
+                     │
+                     ▼
+            ┌────────────────┐
+            │  创建 Module    │
+            │  (ModuleFactory)│
+            └────────┬───────┘
+                     │
+        ┌────────────▼────────────┐
+        │    构建 Module (build)   │
+        │                         │
+        │  1. 执行 Loader 链       │
+        │     tsx → swc-loader    │
+        │     → JavaScript 源码   │
+        │                         │
+        │  2. Parser 解析 AST     │
+        │     提取 import/require │
+        │     → 依赖列表           │
+        └────────────┬────────────┘
+                     │
+                     ▼
+        ┌────────────────────────┐
+        │  处理依赖                │
+        │  (processModuleDeps)   │
+        │                        │
+        │  for each dependency:  │
+        │    resolve → 路径解析    │
+        │    create → 创建 Module │
+        │    build → 递归构建      │  ← 回到上面
+        └────────────────────────┘
+```
+
+### 详细的模块构建过程
+
+```javascript
+// compilation.addEntry 触发后的流程
+
+// Step 1: 创建入口模块
+compilation._addEntryItem(entry, (err, module) => {
+  // Step 2: 工厂创建模块
+  normalModuleFactory.create({
+    context: '/src',
+    dependency: entryDependency,
+  }, (err, module) => {
+
+    // Step 3: resolve 路径
+    // './src/index.tsx' → '/Users/project/src/index.tsx'
+    // 同时确定需要的 Loader 列表
+
+    // Step 4: 构建模块
+    compilation.buildModule(module, (err) => {
+
+      // 4a. runLoaders — 执行 Loader 链
+      runLoaders({
+        resource: '/Users/project/src/index.tsx',
+        loaders: [
+          { loader: 'swc-loader', options: { /* ... */ } },
+        ],
+      }, (err, result) => {
+        module._source = result.source  // JavaScript 源码
+      })
+
+      // 4b. parse — 解析 AST，提取依赖
+      parser.parse(module._source)
+      // → module.dependencies = [
+      //     HarmonyImportDependency('react'),
+      //     HarmonyImportDependency('./App'),
+      //     HarmonyImportDependency('./styles.css'),
+      //   ]
+
+      // Step 5: 递归处理所有依赖
+      compilation.processModuleDependencies(module, (err) => {
+        // 对每个依赖重复 Step 2-5
+        // 直到所有模块都构建完成
+      })
+    })
+  })
+})
+```
+
+### 模块依赖图的形成
+
+```
+index.tsx
+  ├── import React from 'react'
+  │     └── react/index.js
+  │           └── react/cjs/react.production.min.js
+  ├── import App from './App'
+  │     └── App.tsx
+  │           ├── import Header from './Header'
+  │           │     └── Header.tsx
+  │           └── import './App.css'
+  │                 └── App.css
+  └── import './global.css'
+        └── global.css
+
+最终 ModuleGraph 包含以上所有模块及其依赖关系
+```
+
+## 第三阶段：封装（Seal）
+
+所有模块构建完成后，进入封装阶段——**把 Module 组织成 Chunk**。
+
+```
+compilation.seal()
+        │
+        ▼
+  ┌─────────────────────────┐
+  │ 1. 创建 EntryPoint Chunk │
+  │    每个 entry → 一个 Chunk │
+  │    main → ChunkA          │
+  └───────────┬───────────────┘
+              │
+  ┌───────────▼───────────────┐
+  │ 2. 处理异步依赖             │
+  │    import() → 新的 Chunk    │
+  │    lazy('./Page') → ChunkB │
+  └───────────┬───────────────┘
+              │
+  ┌───────────▼───────────────┐
+  │ 3. SplitChunksPlugin       │
+  │    提取公共模块 → ChunkC    │
+  │    vendors → ChunkD        │
+  └───────────┬───────────────┘
+              │
+  ┌───────────▼───────────────┐
+  │ 4. 优化阶段                 │
+  │    Tree Shaking            │
+  │    Scope Hoisting          │
+  │    Module Concatenation    │
+  │    代码压缩 (Terser/SWC)   │
+  └───────────┬───────────────┘
+              │
+  ┌───────────▼───────────────┐
+  │ 5. 生成代码                 │
+  │    Module → 最终 JS 代码    │
+  │    添加 runtime 运行时代码   │
+  │    生成 Hash               │
+  └───────────────────────────┘
+```
+
+### Chunk 的生成逻辑
+
+```javascript
+// 简化的 Chunk 生成过程
+function seal() {
+  // 1. 为每个入口创建 Chunk
+  for (const [name, entry] of this.entries) {
+    const chunk = new Chunk(name)
+    const entrypoint = new Entrypoint(name)
+    entrypoint.pushChunk(chunk)
+
+    // 将入口模块和它的同步依赖放入 Chunk
+    this.chunkGraph.connectChunkAndModule(chunk, entry.module)
+    for (const dep of entry.module.dependencies) {
+      if (dep.isSync) {
+        this.chunkGraph.connectChunkAndModule(chunk, dep.module)
+      }
+    }
+  }
+
+  // 2. 异步导入创建新 Chunk
+  for (const module of this.modules) {
+    for (const dep of module.dependencies) {
+      if (dep instanceof ImportDependency) {
+        const asyncChunk = new Chunk()
+        // import('./Page') → 单独的 Chunk
+        this.chunkGraph.connectChunkAndModule(asyncChunk, dep.module)
+      }
+    }
+  }
+
+  // 3. SplitChunksPlugin 优化
+  this.hooks.optimizeChunks.call(this.chunks, this.chunkGroups)
+
+  // 4. Tree Shaking
+  this.hooks.optimizeTree.callAsync(this.chunks, this.modules)
+
+  // 5. 代码生成
+  this.createChunkAssets()
+}
+```
+
+## 第四阶段：输出（Emit）
+
+```javascript
+// compiler.emitAssets()
+function emitAssets(compilation, callback) {
+  // 1. 触发 emit 钩子（最后修改产物的机会）
+  this.hooks.emit.callAsync(compilation, (err) => {
+
+    // 2. 获取输出配置
+    const outputPath = this.options.output.path  // /dist
+
+    // 3. 写入每个文件
+    for (const [filename, source] of Object.entries(compilation.assets)) {
+      const targetPath = path.join(outputPath, filename)
+
+      // 确保目录存在
+      mkdirp.sync(path.dirname(targetPath))
+
+      // 写入文件
+      fs.writeFileSync(targetPath, source.source())
+
+      // 输出日志
+      // ✓ main.a1b2c3.js    145 kB
+      // ✓ vendors.d4e5f6.js   89 kB
+      // ✓ styles.g7h8i9.css   12 kB
+    }
+
+    // 4. 触发 afterEmit 钩子
+    this.hooks.afterEmit.callAsync(compilation, callback)
+  })
+}
+```
+
+### 最终输出的文件结构
+
+```
+dist/
+├── main.a1b2c3d4.js         # 入口 Chunk
+├── vendors.e5f6g7h8.js      # 第三方库 Chunk
+├── async-page.i9j0k1l2.js   # 异步加载的页面
+├── styles.m3n4o5p6.css       # 提取的 CSS
+├── main.a1b2c3d4.js.map      # Source Map
+└── index.html                # HTML 模板（HtmlWebpackPlugin）
+```
+
+## 完整钩子触发顺序
+
+```
+初始化阶段:
+  environment → afterEnvironment → entryOption →
+  afterPlugins → afterResolvers
+
+运行阶段:
+  beforeRun → run →
+
+编译阶段:
+  beforeCompile → compile → thisCompilation → compilation →
+  make → [模块递归构建] → finishMake →
+
+封装阶段:
+  seal → optimizeDependencies →
+  afterOptimizeDependencies → beforeChunks →
+  afterChunks → optimize → optimizeModules →
+  optimizeChunks → optimizeTree → afterOptimizeTree →
+  processAssets → afterProcessAssets →
+  afterSeal →
+
+完成阶段:
+  afterCompile → shouldEmit → emit → afterEmit → done
+```
+
+## 总结
+
+| 阶段 | 输入 | 输出 | 核心动作 |
+|------|------|------|---------|
+| 初始化 | webpack.config.js | Compiler 实例 | 合并配置、注册插件 |
+| 编译 | Entry 入口路径 | ModuleGraph | 递归构建所有模块 |
+| 封装 | ModuleGraph | Chunks + Assets | Module→Chunk、优化、代码生成 |
+| 输出 | Assets | 磁盘文件 | 写入 dist/ |

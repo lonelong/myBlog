@@ -1,0 +1,373 @@
+---
+title: "React 性能优化全链路：从组件到架构的系统性方案"
+date: "2024-10-02"
+description: "覆盖 React 应用性能优化的完整链路，从组件级优化到架构级方案，附带实战代码和性能对比"
+tags: ["React", "性能优化", "前端", "Fiber"]
+cover: "/images/react-perf-chain.png"
+---
+
+## React 性能优化全景
+
+```
+组件级 → 状态管理级 → 渲染级 → 数据级 → 架构级
+  │         │          │        │        │
+  memo     状态下沉     虚拟列表  请求优化  SSR/SSG
+  useMemo  状态拆分     并发渲染  缓存     代码分割
+  useCallback 不可变数据 Suspense 预加载   懒加载
+```
+
+## 一、组件级优化
+
+### 1. React.memo — 阻止无效重渲染
+
+```tsx
+// 场景：父组件频繁更新，子组件 props 没变
+function Parent() {
+  const [count, setCount] = useState(0)
+
+  return (
+    <div>
+      <button onClick={() => setCount(c => c + 1)}>Count: {count}</button>
+      <ExpensiveList items={staticItems} />  {/* count 变了，items 没变 */}
+    </div>
+  )
+}
+
+// ❌ 每次 Parent 渲染，ExpensiveList 都会重渲染
+function ExpensiveList({ items }) {
+  return items.map(item => <Item key={item.id} {...item} />)
+}
+
+// ✅ memo 包裹：props 不变就不重渲染
+const ExpensiveList = React.memo(function ExpensiveList({ items }) {
+  return items.map(item => <Item key={item.id} {...item} />)
+})
+```
+
+### 2. useMemo + useCallback — 稳定引用
+
+```tsx
+function SearchPage({ data }) {
+  const [query, setQuery] = useState('')
+  const [sort, setSort] = useState('date')
+
+  // ✅ 只在 data/query/sort 变化时重新计算
+  const filtered = useMemo(() => {
+    return data
+      .filter(item => item.title.includes(query))
+      .sort((a, b) => sort === 'date' ? b.date - a.date : b.score - a.score)
+  }, [data, query, sort])
+
+  // ✅ 稳定的函数引用，传给 memo 子组件时不会导致重渲染
+  const handleItemClick = useCallback((id: string) => {
+    navigate(`/item/${id}`)
+  }, [])
+
+  return (
+    <div>
+      <input value={query} onChange={e => setQuery(e.target.value)} />
+      <MemoizedList items={filtered} onItemClick={handleItemClick} />
+    </div>
+  )
+}
+```
+
+### 3. 避免在渲染中创建新对象/数组
+
+```tsx
+// ❌ 每次渲染都创建新对象 → memo 失效
+function Parent() {
+  return <Child style={{ color: 'red' }} data={[1, 2, 3]} />
+  //                   ↑ 新对象             ↑ 新数组
+}
+
+// ✅ 提到组件外面或用 useMemo
+const style = { color: 'red' }
+const data = [1, 2, 3]
+
+function Parent() {
+  return <Child style={style} data={data} />
+}
+```
+
+## 二、状态管理优化
+
+### 1. 状态下沉（State Colocation）
+
+```tsx
+// ❌ 状态放在顶层 → 整棵树重渲染
+function App() {
+  const [inputValue, setInputValue] = useState('')  // 每次输入全 App 重渲染
+
+  return (
+    <div>
+      <Header />  {/* 不需要 inputValue，但被迫重渲染 */}
+      <Sidebar /> {/* 不需要 inputValue，但被迫重渲染 */}
+      <input value={inputValue} onChange={e => setInputValue(e.target.value)} />
+      <SearchResults query={inputValue} />
+    </div>
+  )
+}
+
+// ✅ 状态下沉到需要的地方
+function App() {
+  return (
+    <div>
+      <Header />
+      <Sidebar />
+      <SearchSection />  {/* 状态封装在内部 */}
+    </div>
+  )
+}
+
+function SearchSection() {
+  const [inputValue, setInputValue] = useState('')  // 只影响这个组件
+  return (
+    <>
+      <input value={inputValue} onChange={e => setInputValue(e.target.value)} />
+      <SearchResults query={inputValue} />
+    </>
+  )
+}
+```
+
+### 2. Context 拆分
+
+```tsx
+// ❌ 大 Context → 任何值变化都导致所有消费者重渲染
+const AppContext = createContext({ user: null, theme: 'dark', locale: 'zh' })
+// theme 变了 → 只用 user 的组件也重渲染
+
+// ✅ 拆分为独立 Context
+const UserContext = createContext(null)
+const ThemeContext = createContext('dark')
+const LocaleContext = createContext('zh')
+// theme 变了 → 只有用 ThemeContext 的组件重渲染
+```
+
+### 3. 使用 useReducer 管理复杂状态
+
+```tsx
+// 多个相关 useState → 多次渲染
+const [name, setName] = useState('')
+const [age, setAge] = useState(0)
+const [email, setEmail] = useState('')
+// 同时更新三个 → 可能触发多次渲染
+
+// useReducer → 一次 dispatch 更新所有状态
+const [state, dispatch] = useReducer(reducer, { name: '', age: 0, email: '' })
+dispatch({ type: 'UPDATE_ALL', payload: { name: 'Alice', age: 25, email: 'a@b.com' } })
+// 只触发一次渲染
+```
+
+## 三、渲染优化
+
+### 1. 虚拟列表
+
+```tsx
+import { FixedSizeList } from 'react-window'
+
+// 10000 条数据 → 只渲染可见的 ~20 条
+function VirtualList({ items }) {
+  return (
+    <FixedSizeList
+      height={600}
+      itemCount={items.length}
+      itemSize={60}
+      width="100%"
+    >
+      {({ index, style }) => (
+        <div style={style} className="flex items-center px-4">
+          <span>{items[index].name}</span>
+        </div>
+      )}
+    </FixedSizeList>
+  )
+}
+
+// DOM 节点数: 10000 → ~25（减少 99.75%）
+```
+
+### 2. React 18 并发特性
+
+```tsx
+// useTransition：标记低优先级更新
+function SearchWithTransition() {
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState([])
+  const [isPending, startTransition] = useTransition()
+
+  const handleChange = (e) => {
+    setQuery(e.target.value)  // 高优先级：输入框立即响应
+
+    startTransition(() => {
+      setResults(filterData(e.target.value))  // 低优先级：可以延迟
+    })
+  }
+
+  return (
+    <div>
+      <input value={query} onChange={handleChange} />
+      {isPending && <Spinner />}
+      <ResultList data={results} />
+    </div>
+  )
+}
+
+// useDeferredValue：延迟更新某个值
+function SearchResults({ query }) {
+  const deferredQuery = useDeferredValue(query)
+  // query 立即变化（输入框响应快）
+  // deferredQuery 延迟变化（列表渲染不阻塞输入）
+
+  const filtered = useMemo(
+    () => heavyFilter(data, deferredQuery),
+    [deferredQuery]
+  )
+
+  return <List items={filtered} />
+}
+```
+
+### 3. Suspense 流式加载
+
+```tsx
+function ProfilePage() {
+  return (
+    <div>
+      {/* 立即显示 */}
+      <h1>用户主页</h1>
+
+      {/* 数据加载中显示骨架屏，加载完替换 */}
+      <Suspense fallback={<ProfileSkeleton />}>
+        <ProfileDetails />
+      </Suspense>
+
+      <Suspense fallback={<PostsSkeleton />}>
+        <UserPosts />
+      </Suspense>
+
+      {/* 两个 Suspense 独立加载，互不阻塞 */}
+    </div>
+  )
+}
+```
+
+## 四、数据层优化
+
+### 1. 请求去重和缓存
+
+```tsx
+// React Query / SWR 自动缓存和去重
+import { useQuery } from '@tanstack/react-query'
+
+function UserProfile({ id }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['user', id],
+    queryFn: () => fetchUser(id),
+    staleTime: 5 * 60 * 1000,  // 5 分钟内不重新请求
+    cacheTime: 30 * 60 * 1000, // 缓存保留 30 分钟
+  })
+
+  // 多个组件用相同的 queryKey → 只发一次请求
+  // 后续访问 → 直接从缓存读取
+}
+```
+
+### 2. 预加载
+
+```tsx
+// 路由预加载：鼠标悬停时提前加载
+function NavLink({ to, children }) {
+  const prefetchPage = () => {
+    const Component = lazy(() => import(`./pages/${to}`))
+    // 触发代码和数据的预加载
+  }
+
+  return (
+    <Link to={to} onMouseEnter={prefetchPage}>
+      {children}
+    </Link>
+  )
+}
+
+// Next.js 自动预加载
+import Link from 'next/link'
+<Link href="/about">About</Link>
+// Next.js 会在链接出现在视口时自动预加载 /about 的代码
+```
+
+## 五、架构级优化
+
+### 1. 代码分割策略
+
+```tsx
+// 路由级分割
+const Home = lazy(() => import('./pages/Home'))
+const Blog = lazy(() => import('./pages/Blog'))
+const Chat = lazy(() => import('./pages/Chat'))
+
+// 组件级分割
+const HeavyChart = lazy(() => import('./components/Chart'))
+const MarkdownEditor = lazy(() => import('./components/Editor'))
+
+// 库级分割
+const pdf = () => import('pdfjs-dist').then(m => m.default)
+```
+
+### 2. 选择合适的渲染模式
+
+```
+页面类型        →  渲染模式
+─────────────────────────────
+博客文章        →  SSG（构建时生成）
+商品列表        →  ISR（定时更新）
+用户 Dashboard  →  CSR（客户端渲染）
+搜索结果        →  SSR（实时渲染）
+```
+
+## 性能分析工具
+
+```
+React DevTools Profiler:
+  1. 打开 React DevTools → Profiler 面板
+  2. 点击录制 → 操作页面 → 停止录制
+  3. 查看每个组件的渲染次数和耗时
+  4. 识别不必要的重渲染（灰色 = 跳过，彩色 = 渲染）
+
+Chrome DevTools Performance:
+  1. 打开 Performance 面板 → 录制
+  2. 查看火焰图：哪些函数耗时最长
+  3. 查看 Long Tasks（红色标记）
+  4. 查看布局偏移时刻
+
+why-did-you-render:
+  import whyDidYouRender from '@welldone-software/why-did-you-render'
+  whyDidYouRender(React, { trackAllPureComponents: true })
+  // 在控制台打印不必要重渲染的原因
+```
+
+## 优化决策流程
+
+```
+页面/组件卡顿？
+  │
+  ├─ Profiler 分析：是否有不必要的重渲染？
+  │   ├─ 是 → React.memo + useMemo + useCallback
+  │   └─ 否 → 继续
+  │
+  ├─ Performance 分析：是否有长任务？
+  │   ├─ 是 → 代码分割 / Web Worker / useTransition
+  │   └─ 否 → 继续
+  │
+  ├─ DOM 节点太多？
+  │   ├─ 是 → 虚拟列表 (react-window)
+  │   └─ 否 → 继续
+  │
+  ├─ 网络请求慢？
+  │   ├─ 是 → 缓存 / 预加载 / SSG
+  │   └─ 否 → 继续
+  │
+  └─ Bundle 太大？
+      └─ 是 → 代码分割 / Tree Shaking / 依赖替换
+```

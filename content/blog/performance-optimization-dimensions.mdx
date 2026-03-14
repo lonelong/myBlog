@@ -1,0 +1,360 @@
+---
+title: "前端性能优化五大维度：加载、渲染、交互、资源、架构"
+date: "2024-09-12"
+description: "从五个核心维度系统性梳理前端性能优化的完整知识体系，构建你的性能优化思维模型"
+tags: ["性能优化", "前端", "前端架构", "Core Web Vitals"]
+cover: "/images/perf-dimensions.png"
+---
+
+## 五大维度全景
+
+```
+前端性能优化
+  │
+  ├── 1. 加载性能 ── 资源到达浏览器的速度
+  │      └── 网络、缓存、CDN、压缩、协议
+  │
+  ├── 2. 渲染性能 ── 浏览器把内容画到屏幕的速度
+  │      └── 关键渲染路径、重排重绘、合成
+  │
+  ├── 3. 交互性能 ── 用户操作后的响应速度
+  │      └── 主线程优化、事件处理、动画
+  │
+  ├── 4. 资源优化 ── 减少需要加载的内容总量
+  │      └── 图片、字体、JS、CSS 体积优化
+  │
+  └── 5. 架构优化 ── 从系统设计层面提升性能
+         └── SSR/SSG、代码分割、微前端
+```
+
+## 维度一：加载性能
+
+**核心目标**：让资源更快到达浏览器。
+
+### 1.1 网络协议优化
+
+```
+HTTP/1.1 → HTTP/2 → HTTP/3
+
+HTTP/2 收益：
+  ├── 多路复用：一个连接传输多个文件（不再需要域名分片）
+  ├── 头部压缩：HPACK 算法压缩重复 header
+  ├── 服务器推送：主动推送关键资源
+  └── 二进制分帧：更高效的传输格式
+
+HTTP/3 (QUIC) 收益：
+  ├── 基于 UDP：消除队头阻塞
+  ├── 0-RTT：重复连接零延迟
+  └── 连接迁移：WiFi 切 4G 不断连
+```
+
+### 1.2 缓存策略
+
+```
+强缓存（不发请求）：
+  Cache-Control: max-age=31536000, immutable
+  适用：带 hash 的 JS/CSS/图片（bundle.a1b2c3.js）
+
+协商缓存（发请求验证）：
+  Cache-Control: no-cache
+  ETag / If-None-Match
+  适用：HTML 页面
+
+Service Worker 缓存：
+  Cache First → 优先缓存，失败走网络
+  Network First → 优先网络，失败用缓存
+  Stale While Revalidate → 先返回缓存，同时后台更新
+```
+
+### 1.3 CDN 和边缘计算
+
+```
+静态资源 → CDN 全球节点 → 用户从最近节点获取
+动态页面 → Edge Function → 在边缘节点运行 SSR
+API 数据 → Edge Cache → 边缘缓存热数据
+```
+
+### 1.4 压缩
+
+```
+文本资源：Brotli > Gzip
+  原始: 500KB → Gzip: 150KB → Brotli: 120KB
+
+图片资源：
+  JPEG → WebP (小 25-35%)
+  PNG → WebP/AVIF (小 30-50%)
+  SVG → SVGO 压缩 (小 30-60%)
+```
+
+## 维度二：渲染性能
+
+**核心目标**：让浏览器更快将内容绘制到屏幕。
+
+### 2.1 关键渲染路径
+
+```
+优化目标：缩短从 HTML 到达到 FCP 的时间
+
+  HTML 到达 → [解析 DOM] → [下载 CSS] → [解析 CSSOM] → [Render Tree] → FCP
+              ↑ 优化点1     ↑ 优化点2     ↑ 优化点3
+
+优化点1：减小 HTML 体积
+  SSR 时避免注入过多数据到 HTML
+
+优化点2：内联关键 CSS
+  将首屏需要的 CSS 直接内联到 <style>
+  其余 CSS 异步加载
+
+优化点3：避免 CSS 中 @import
+  @import 是串行加载 → <link> 是并行加载
+```
+
+### 2.2 避免重排重绘
+
+```
+重排触发（慢）：width, height, margin, padding, top, left, display
+重绘触发（较慢）：color, background-color, box-shadow, visibility
+合成触发（快）：transform, opacity
+
+优化：
+  ✅ 动画用 transform + opacity
+  ✅ 批量修改 DOM（DocumentFragment）
+  ✅ 避免读写交替（Layout Thrashing）
+  ✅ will-change 提升动画元素为独立图层
+```
+
+### 2.3 GPU 加速
+
+```css
+/* 把动画元素提升到 GPU 图层 */
+.animated {
+  will-change: transform;
+  transform: translateZ(0);  /* 触发 GPU 加速 */
+}
+
+/* 只有这些属性能被 GPU 加速 */
+transform    ✅
+opacity      ✅
+filter       ✅
+backdrop-filter ✅
+
+/* 其他属性（width, top, color...）仍在 CPU 主线程处理 */
+```
+
+## 维度三：交互性能
+
+**核心目标**：用户操作后立即响应，保证 60fps 流畅度。
+
+### 3.1 主线程优化
+
+```
+60fps = 每帧 16.67ms
+
+一帧中需要完成：
+  [JS 处理] + [Style] + [Layout] + [Paint] + [Composite] ≤ 16.67ms
+
+如果 JS 执行超过 16.67ms → 掉帧 → 卡顿
+
+优化：
+  ✅ 拆分长任务（requestIdleCallback / scheduler.yield）
+  ✅ 使用 useTransition 标记低优先级更新
+  ✅ Web Worker 处理 CPU 密集计算
+  ✅ requestAnimationFrame 同步动画到浏览器刷新
+```
+
+### 3.2 事件处理优化
+
+```javascript
+// 防抖：搜索输入
+const debouncedSearch = useMemo(
+  () => debounce((query) => fetchResults(query), 300),
+  []
+)
+
+// 节流：滚动事件
+useEffect(() => {
+  const throttledScroll = throttle(handleScroll, 100)
+  window.addEventListener('scroll', throttledScroll, { passive: true })
+  return () => window.removeEventListener('scroll', throttledScroll)
+}, [])
+// passive: true → 告诉浏览器不会 preventDefault → 滚动更流畅
+```
+
+### 3.3 动画优化
+
+```
+优先级排序（从好到差）：
+  1. CSS Transition/Animation（GPU 合成）
+  2. Web Animations API
+  3. requestAnimationFrame
+  4. setTimeout/setInterval（最差，不对齐屏幕刷新）
+
+关键：只动画 transform 和 opacity
+```
+
+## 维度四：资源优化
+
+**核心目标**：减少需要加载的总体积。
+
+### 4.1 JavaScript 优化
+
+```
+代码分割：
+  路由级 → lazy(() => import('./Page'))
+  组件级 → lazy(() => import('./HeavyChart'))
+  库级 → 动态 import 大型库
+
+Tree Shaking：
+  使用 ES Module（import/export）
+  避免副作用（sideEffects: false）
+  按需导入（import { debounce } from 'lodash-es'）
+
+压缩：
+  Terser / SWC / esbuild 压缩
+  删除 console.log、注释、空白
+```
+
+### 4.2 图片优化
+
+```
+格式选择：
+  照片 → WebP / AVIF（比 JPEG 小 30%+）
+  图标 → SVG（矢量，无限缩放）
+  简单图形 → CSS 实现（纯代码，零请求）
+
+加载策略：
+  首屏图片 → <link rel="preload"> + priority
+  非首屏图片 → loading="lazy"
+  缩略图 → 模糊占位 + 渐进加载
+
+尺寸适配：
+  srcset + sizes 响应式图片
+  不在手机上加载 4K 大图
+```
+
+### 4.3 字体优化
+
+```
+font-display: swap → 先用系统字体，加载后切换
+font-display: optional → 100ms 内没加载完就永远用系统字体
+
+子集化：
+  全量中文字体: 5-10MB
+  子集化后: 100-500KB（只包含页面用到的字符）
+
+自托管（next/font）：
+  消除外部请求 → 构建时下载 → 零运行时延迟
+```
+
+### 4.4 CSS 优化
+
+```
+关键 CSS 内联 + 非关键 CSS 异步加载
+PurgeCSS / Tailwind purge → 删除未使用样式
+CSS Modules / CSS-in-JS → 作用域隔离，不加载无用样式
+避免 @import（串行）→ 用 <link>（并行）
+```
+
+## 维度五：架构优化
+
+**核心目标**：从系统设计层面提升性能上限。
+
+### 5.1 渲染模式选型
+
+```
+页面类型        → 最佳渲染模式
+─────────────────────────────
+博客/文档       → SSG（最快，CDN 直出）
+商品/帖子       → ISR（SSG + 定时更新）
+搜索/Feed       → SSR（实时数据）
+后台管理        → CSR（交互为主）
+混合页面        → SSG 外壳 + CSR 动态部分
+```
+
+### 5.2 代码分割策略
+
+```
+Level 1: 路由分割
+  每个路由一个 Chunk → 只加载当前页面代码
+
+Level 2: 组件分割
+  重型组件（编辑器、图表）延迟加载
+
+Level 3: 第三方库分割
+  vendor Chunk 独立 → 变动少，缓存命中率高
+
+Level 4: 按需加载
+  滚动到可视区 → 加载对应模块
+  用户交互 → 加载对应功能
+```
+
+### 5.3 数据架构
+
+```
+请求优化：
+  API 聚合 → BFF 层合并多个请求为一个
+  GraphQL → 客户端按需请求字段
+  SWR/React Query → 缓存 + 去重 + 预加载
+
+数据预加载：
+  路由切换前 → prefetch 下一页数据
+  鼠标悬停 → 预加载链接目标
+  Service Worker → 后台预缓存
+```
+
+### 5.4 渐进增强
+
+```
+核心功能 → HTML + 基础 CSS（无 JS 也可用）
+增强功能 → JS 加载后逐步增强交互
+高级功能 → 按需加载（动画、高级编辑器）
+
+例如：
+  博客文章 → SSG 生成完整 HTML → 无 JS 也可阅读
+  评论功能 → JS 加载后显示（非核心功能）
+  代码高亮 → IntersectionObserver 触发加载（进入可视区才加载）
+```
+
+## 优化优先级矩阵
+
+```
+              影响大                影响小
+         ┌──────────────────┬──────────────────┐
+         │                  │                  │
+  实施   │  SSR/SSG 选型    │  HTTP/2 升级      │
+  成本   │  代码分割         │  DNS 预解析       │
+  低     │  图片 WebP        │  preconnect      │
+         │  Brotli 压缩     │                  │
+         │                  │                  │
+         ├──────────────────┼──────────────────┤
+         │                  │                  │
+  实施   │  Service Worker  │  自建 CDN         │
+  成本   │  虚拟列表         │  HTTP/3           │
+  高     │  BFF 聚合层      │  WASM 优化        │
+         │  微前端          │                  │
+         │                  │                  │
+         └──────────────────┴──────────────────┘
+
+优先做 "影响大 + 成本低" 的优化！
+```
+
+## 总结
+
+```
+五大维度的核心指标：
+
+加载性能 → TTFB, FCP
+  关键词：CDN、缓存、压缩、HTTP/2
+
+渲染性能 → FP, FCP, LCP
+  关键词：关键渲染路径、重排重绘、GPU
+
+交互性能 → FID, TTI, INP
+  关键词：长任务、事件处理、动画帧率
+
+资源优化 → Transfer Size, Coverage
+  关键词：代码分割、Tree Shaking、图片优化
+
+架构优化 → 整体体验
+  关键词：SSR/SSG、渐进增强、数据预加载
+```

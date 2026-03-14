@@ -1,0 +1,368 @@
+---
+title: "浏览器加载与渲染时间线：从 URL 输入到页面展示的完整过程 ⭐"
+date: "2024-09-15"
+description: "用时间线图完整呈现浏览器从输入 URL 到页面展示的每一步，涵盖 DNS、TCP、资源加载、渲染管线和 ResourceTiming API"
+tags: ["浏览器", "渲染原理", "ResourceTiming", "性能优化"]
+cover: "/images/browser-timeline.png"
+---
+
+## 全景时间线
+
+从用户输入 URL 到页面完全可交互的**完整时间线**：
+
+```
+用户输入 URL 并回车
+│
+├── ① DNS 解析          (0-100ms)
+│   example.com → 93.184.216.34
+│
+├── ② TCP 三次握手       (0-100ms)
+│   SYN → SYN-ACK → ACK
+│
+├── ③ TLS 握手           (0-150ms)  HTTPS 才有
+│   ClientHello → ServerHello → 密钥协商
+│
+├── ④ HTTP 请求发出       (0ms)
+│   GET /index.html HTTP/2
+│
+├── ⑤ 服务器处理          (10-500ms)
+│   路由 → 数据查询 → 渲染 HTML
+│
+├── ⑥ 接收第一字节 (TTFB)
+│
+├── ⑦ HTML 下载 + 增量解析
+│   ├── 遇到 <link rel="stylesheet"> → 并行下载 CSS
+│   ├── 遇到 <script defer> → 并行下载 JS
+│   ├── 遇到 <img> → 并行下载图片
+│   └── 遇到 <script>（无 defer/async）→ 停止解析，等下载+执行
+│
+├── ⑧ CSSOM 构建          CSS 下载完成后
+│
+├── ⑨ DOM + CSSOM → Render Tree
+│
+├── ⑩ Layout（布局）       计算位置和大小
+│
+├── ⑪ Paint（绘制）        像素绘制到图层
+│
+├── ⑫ Composite（合成）    图层合成
+│
+├── ⑬ First Paint (FP)    首次绘制
+├── ⑭ First Contentful Paint (FCP)  首次有内容
+│
+├── ⑮ JS 执行 + Hydration
+│
+├── ⑯ Largest Contentful Paint (LCP)
+│
+└── ⑰ Time to Interactive (TTI)    完全可交互
+```
+
+## 网络阶段详解
+
+### ResourceTiming API
+
+浏览器为每个资源提供了精确的时间数据：
+
+```
+         ┌─── redirectStart
+         │┌── redirectEnd
+         ││
+         ││   ┌─── fetchStart
+         ││   │
+         ││   │  ┌── domainLookupStart
+         ││   │  │┌─ domainLookupEnd
+         ││   │  ││
+         ││   │  ││  ┌── connectStart
+         ││   │  ││  │  ┌── secureConnectionStart (TLS)
+         ││   │  ││  │  │  ┌── connectEnd
+         ││   │  ││  │  │  │
+         ││   │  ││  │  │  │   ┌── requestStart
+         ││   │  ││  │  │  │   │
+         ││   │  ││  │  │  │   │      ┌── responseStart (TTFB)
+         ││   │  ││  │  │  │   │      │
+         ││   │  ││  │  │  │   │      │           ┌── responseEnd
+         ▼▼   ▼  ▼▼  ▼  ▼  ▼   ▼      ▼           ▼
+  ───[Redirect][DNS][TCP][TLS][Request][  Response  ]───
+         │      │    │    │      │          │
+         │      │    │    │      │          └─ 内容传输
+         │      │    │    │      └─ 等待服务器响应
+         │      │    │    └─ TLS 密钥协商
+         │      │    └─ TCP 三次握手
+         │      └─ DNS 域名解析
+         └─ HTTP 重定向
+```
+
+### 用代码获取时间数据
+
+```javascript
+// 获取页面主文档的时间数据
+const [navigation] = performance.getEntriesByType('navigation')
+
+console.log({
+  // 重定向时间
+  redirect: navigation.redirectEnd - navigation.redirectStart,
+
+  // DNS 查询时间
+  dns: navigation.domainLookupEnd - navigation.domainLookupStart,
+
+  // TCP 连接时间
+  tcp: navigation.connectEnd - navigation.connectStart,
+
+  // TLS 握手时间
+  tls: navigation.requestStart - navigation.secureConnectionStart,
+
+  // TTFB（等待服务器响应）
+  ttfb: navigation.responseStart - navigation.requestStart,
+
+  // 内容下载时间
+  download: navigation.responseEnd - navigation.responseStart,
+
+  // DOM 解析时间
+  domParse: navigation.domInteractive - navigation.responseEnd,
+
+  // DOM 完全加载
+  domComplete: navigation.domComplete - navigation.domInteractive,
+})
+
+// 获取所有资源的加载时间
+const resources = performance.getEntriesByType('resource')
+resources.forEach(r => {
+  console.log(`${r.name}: ${Math.round(r.duration)}ms (size: ${r.transferSize} bytes)`)
+})
+```
+
+## 渲染阶段详解
+
+### HTML 解析与资源发现
+
+```
+HTML 文档边下载边解析（增量解析）：
+
+字节流 → 字符 → Token → DOM 节点 → DOM 树
+
+<html>                    → 创建 Document 节点
+  <head>
+    <link href="a.css">   → 发现 CSS → 并行下载（不阻塞解析）
+    <script src="b.js">   → 发现 JS → 阻塞解析！等下载+执行
+    <script defer src="c.js">  → 并行下载，不阻塞
+  </head>
+  <body>
+    <img src="d.png">     → 发现图片 → 并行下载
+    <p>Hello</p>          → 创建 DOM 节点
+  </body>
+</html>
+
+预扫描器（Preload Scanner）：
+  即使 JS 阻塞了 HTML 解析，浏览器的预扫描器
+  仍会继续扫描后面的 HTML，提前发现资源并开始下载
+```
+
+### 渲染管线的完整流程
+
+```
+Step 1: Style Calculation（样式计算）
+  DOM 树 + CSSOM → 计算每个元素的最终样式
+  选择器匹配、样式继承、计算值解析
+
+Step 2: Layout（布局/重排）
+  根据样式计算每个元素的几何信息：
+  位置（x, y）、大小（width, height）
+  盒模型（margin, padding, border）
+
+Step 3: Layer Tree（图层树）
+  决定哪些元素需要独立图层：
+  - position: fixed/sticky
+  - transform / opacity 动画
+  - will-change
+  - video / canvas
+  - overflow: scroll
+
+Step 4: Paint（绘制）
+  为每个图层生成绘制指令：
+  "在 (x,y) 画一个 200x100 的矩形，填充 #7c3aed"
+  "在 (x+10, y+20) 绘制文字 'Hello'，字体 16px"
+
+Step 5: Composite（合成）
+  GPU 把所有图层按正确的层级顺序合成为最终画面
+  → 输出到屏幕
+```
+
+### 关键渲染路径（Critical Rendering Path）
+
+```
+                HTML 到达
+                    │
+           ┌────────┴────────┐
+           │                 │
+      构建 DOM 树        下载 CSS
+           │                 │
+           │            构建 CSSOM
+           │                 │
+           └────────┬────────┘
+                    │
+              Render Tree
+                    │
+                 Layout
+                    │
+                  Paint
+                    │
+                Composite
+                    │
+             ★ First Paint ★
+
+关键渲染路径优化 = 让这条路径尽量短、尽量快：
+  1. 减小 HTML 体积
+  2. 内联关键 CSS（消除 CSS 下载等待）
+  3. 延迟非关键 JS（不阻塞 DOM 构建）
+  4. 预加载关键资源
+```
+
+## Navigation Timing API 全景
+
+```javascript
+// PerformanceNavigationTiming 提供的完整时间点
+
+const t = performance.getEntriesByType('navigation')[0]
+
+// 整体时间线
+const timeline = {
+  // ① 页面卸载
+  unloadEventStart: t.unloadEventStart,
+  unloadEventEnd: t.unloadEventEnd,
+
+  // ② 重定向
+  redirectStart: t.redirectStart,
+  redirectEnd: t.redirectEnd,
+
+  // ③ Service Worker
+  workerStart: t.workerStart,
+  fetchStart: t.fetchStart,
+
+  // ④ DNS
+  domainLookupStart: t.domainLookupStart,
+  domainLookupEnd: t.domainLookupEnd,
+
+  // ⑤ TCP + TLS
+  connectStart: t.connectStart,
+  secureConnectionStart: t.secureConnectionStart,
+  connectEnd: t.connectEnd,
+
+  // ⑥ HTTP 请求/响应
+  requestStart: t.requestStart,
+  responseStart: t.responseStart,  // TTFB
+  responseEnd: t.responseEnd,
+
+  // ⑦ DOM 处理
+  domInteractive: t.domInteractive,         // DOM 解析完成
+  domContentLoadedEventStart: t.domContentLoadedEventStart,
+  domContentLoadedEventEnd: t.domContentLoadedEventEnd,
+  domComplete: t.domComplete,
+
+  // ⑧ Load 事件
+  loadEventStart: t.loadEventStart,
+  loadEventEnd: t.loadEventEnd,
+}
+```
+
+```
+时间线可视化：
+
+navigationStart
+  │
+  ├─ redirect ──────────┤
+  │                      │
+  ├─ App Cache ──────────┤
+  │                      │
+  ├─ DNS ────────────────┤
+  │                      │
+  ├─ TCP ────────────────┤
+  │                      │
+  ├─ Request ────────────┤ ← requestStart
+  │                      │
+  ├─ Response ───────────┤ ← TTFB → responseStart
+  │                      │
+  ├─ DOM Processing ─────┤
+  │  │                   │
+  │  ├─ domInteractive   │ ← HTML 解析完
+  │  │                   │
+  │  ├─ DOMContentLoaded │ ← DOM + defer JS 完成
+  │  │                   │
+  │  └─ domComplete      │ ← 所有资源加载完
+  │                      │
+  └─ Load Event ─────────┘ ← window.onload
+```
+
+## 实战：构建性能监控面板
+
+```typescript
+// lib/performance-monitor.ts
+
+export function collectMetrics() {
+  const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming
+  const paint = performance.getEntriesByType('paint')
+  const fp = paint.find(e => e.name === 'first-paint')
+  const fcp = paint.find(e => e.name === 'first-contentful-paint')
+
+  return {
+    // 网络指标
+    dns: Math.round(nav.domainLookupEnd - nav.domainLookupStart),
+    tcp: Math.round(nav.connectEnd - nav.connectStart),
+    ttfb: Math.round(nav.responseStart - nav.requestStart),
+    download: Math.round(nav.responseEnd - nav.responseStart),
+
+    // 渲染指标
+    fp: fp ? Math.round(fp.startTime) : 0,
+    fcp: fcp ? Math.round(fcp.startTime) : 0,
+    domInteractive: Math.round(nav.domInteractive),
+    domComplete: Math.round(nav.domComplete),
+    load: Math.round(nav.loadEventEnd),
+
+    // 资源统计
+    resourceCount: performance.getEntriesByType('resource').length,
+    totalTransferSize: performance.getEntriesByType('resource')
+      .reduce((sum, r: any) => sum + (r.transferSize || 0), 0),
+  }
+}
+
+// 使用 PerformanceObserver 监听 LCP
+export function observeLCP(callback: (lcp: number) => void) {
+  const observer = new PerformanceObserver((list) => {
+    const entries = list.getEntries()
+    const last = entries[entries.length - 1]
+    callback(Math.round(last.startTime))
+  })
+  observer.observe({ type: 'largest-contentful-paint', buffered: true })
+}
+```
+
+## 总结：一张图看懂全过程
+
+```
+                         网络阶段
+  ┌─────────────────────────────────────────────┐
+  │  DNS → TCP → TLS → Request → Response       │
+  │  (域名)  (连接) (加密)  (请求)   (下载)       │
+  └────────────────────┬────────────────────────┘
+                       │
+                       ▼  HTML 到达
+                         解析阶段
+  ┌─────────────────────────────────────────────┐
+  │  HTML 解析 → DOM 构建                         │
+  │  CSS 下载 → CSSOM 构建     (并行)             │
+  │  JS 下载 → 执行            (可能阻塞)          │
+  └────────────────────┬────────────────────────┘
+                       │
+                       ▼  DOM + CSSOM 就绪
+                         渲染阶段
+  ┌─────────────────────────────────────────────┐
+  │  Style → Layout → Layer → Paint → Composite │
+  │ (样式计算) (布局)  (分层)  (绘制)   (合成)      │
+  └────────────────────┬────────────────────────┘
+                       │
+                       ▼  画面出现
+                         交互阶段
+  ┌─────────────────────────────────────────────┐
+  │  FP → FCP → LCP → TTI                       │
+  │       Hydration (React)                      │
+  │       事件绑定                                 │
+  └─────────────────────────────────────────────┘
+```
