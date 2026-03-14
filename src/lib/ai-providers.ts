@@ -70,7 +70,7 @@ export function getProviderConfig(providerId: string) {
 }
 
 export function getDefaultProvider(): string {
-  return 'claude'
+  return 'deepseek'
 }
 
 export function getDefaultModel(providerId: string): string {
