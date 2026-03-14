@@ -37,6 +37,14 @@ export const metadata: Metadata = {
   description: '专注 React/Next.js 的前端工程师，分享技术文章与开源项目',
   keywords: ['前端开发', 'React', 'Next.js', 'TypeScript', '作品集', '博客'],
   authors: [{ name: siteConfig.authorName }],
+  icons: {
+    icon: [
+      { url: '/favicon.ico', sizes: '32x32' },
+      { url: '/favicon.svg', type: 'image/svg+xml' },
+    ],
+    apple: '/apple-touch-icon.png',
+  },
+  manifest: '/site.webmanifest',
   openGraph: {
     type: 'website',
     locale: 'zh_CN',

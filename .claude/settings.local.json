@@ -15,7 +15,12 @@
       "Bash(xargs kill -9)",
       "mcp__Claude_Preview__preview_start",
       "Bash(npm uninstall:*)",
-      "Bash(npx next:*)"
+      "Bash(npx next:*)",
+      "Bash(npm list:*)",
+      "Bash(npx --yes sharp-cli --input public/favicon.svg --output public/icon-192.png resize 192 192)",
+      "Bash(npx sharp-cli:*)",
+      "Bash(node -e \":*)",
+      "Bash(ls -lah /Volumes/ZHITAI_7100/myBlog/public/favicon* /Volumes/ZHITAI_7100/myBlog/public/icon-* /Volumes/ZHITAI_7100/myBlog/public/apple-touch-icon.png /Volumes/ZHITAI_7100/myBlog/public/site.webmanifest)"
     ]
   }
 }
