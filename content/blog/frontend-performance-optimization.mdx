@@ -1,0 +1,381 @@
+---
+title: "前端性能优化全指南：从加载到运行时的系统性优化"
+date: "2024-10-28"
+description: "系统性梳理前端性能优化的方方面面，涵盖网络层、资源加载、渲染性能、运行时优化和监控体系"
+tags: ["性能优化", "前端", "Lighthouse", "Core Web Vitals"]
+cover: "/images/performance.png"
+---
+
+## 性能优化的度量指标
+
+优化前先建立度量标准，否则就是盲目优化。
+
+### Core Web Vitals（核心网页指标）
+
+```
+LCP（Largest Contentful Paint）最大内容绘制
+  衡量：页面主要内容何时可见
+  目标：< 2.5 秒
+  影响因素：图片加载、字体加载、服务端响应时间
+
+FID（First Input Delay）首次输入延迟
+  衡量：用户首次交互到浏览器响应的延迟
+  目标：< 100ms
+  影响因素：主线程阻塞、长任务、JS 执行时间
+
+CLS（Cumulative Layout Shift）累积布局偏移
+  衡量：页面内容是否意外跳动
+  目标：< 0.1
+  影响因素：图片无尺寸、动态插入内容、字体切换
+```
+
+### 完整指标体系
+
+```
+页面加载时序：
+  │
+  ├── TTFB (Time to First Byte)     ← 服务器响应速度
+  ├── FP (First Paint)               ← 首次绘制（可能是白屏→有色）
+  ├── FCP (First Contentful Paint)   ← 首次有意义内容
+  ├── LCP (Largest Contentful Paint) ← 最大内容元素
+  ├── FID (First Input Delay)        ← 首次可交互延迟
+  └── TTI (Time to Interactive)      ← 完全可交互
+```
+
+## 一、网络层优化
+
+### 1. 资源压缩
+
+```javascript
+// next.config.js — 启用压缩
+module.exports = {
+  compress: true,  // 默认启用 gzip
+
+  // webpack 配置 Brotli 压缩（比 gzip 小 15-25%）
+  webpack: (config) => {
+    if (!config.plugins) config.plugins = []
+    // 生产环境使用 Brotli
+    return config
+  },
+}
+```
+
+```
+文件大小对比：
+  bundle.js    → 500KB（原始）
+  bundle.js.gz → 150KB（gzip，压缩 70%）
+  bundle.js.br → 120KB（brotli，压缩 76%）
+```
+
+### 2. HTTP/2 和 HTTP/3
+
+```
+HTTP/1.1 的问题：
+  浏览器对同一域名最多 6 个并发连接
+  请求必须排队（队头阻塞）
+
+HTTP/2 优化：
+  ✅ 多路复用：一个连接上并行传输多个请求
+  ✅ 头部压缩：减少重复 header
+  ✅ 服务器推送：主动推送资源
+
+HTTP/3 (QUIC):
+  ✅ 基于 UDP，无队头阻塞
+  ✅ 0-RTT 建连
+  ✅ 更好的弱网表现
+```
+
+### 3. 资源预加载
+
+```html
+<!-- DNS 预解析：提前解析第三方域名 -->
+<link rel="dns-prefetch" href="https://api.example.com" />
+
+<!-- 预连接：DNS + TCP + TLS 提前完成 -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+
+<!-- 预加载：关键资源优先下载 -->
+<link rel="preload" href="/fonts/inter.woff2" as="font" crossorigin />
+
+<!-- 预获取：下一页可能用到的资源 -->
+<link rel="prefetch" href="/next-page-bundle.js" />
+```
+
+## 二、资源加载优化
+
+### 1. 代码分割（Code Splitting）
+
+```tsx
+// 路由级分割
+import { lazy, Suspense } from 'react'
+
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const Settings = lazy(() => import('./pages/Settings'))
+
+// 组件级分割
+const HeavyChart = lazy(() => import('./components/HeavyChart'))
+
+function Page() {
+  return (
+    <Suspense fallback={<Skeleton />}>
+      <HeavyChart />
+    </Suspense>
+  )
+}
+```
+
+```
+分割前：bundle.js (800KB) — 首页加载全部代码
+分割后：
+  main.js     (200KB) — 首页核心代码
+  dashboard.js (300KB) — 进入 Dashboard 才加载
+  settings.js  (150KB) — 进入 Settings 才加载
+  chart.js     (150KB) — 图表可见时才加载
+```
+
+### 2. 图片优化
+
+```tsx
+// Next.js Image 组件自动优化
+import Image from 'next/image'
+
+<Image
+  src="/hero.jpg"
+  width={1200}
+  height={600}
+  alt="Hero"
+  priority          // 首屏图片：预加载
+  placeholder="blur" // 模糊占位
+  blurDataURL="..."  // base64 缩略图
+  sizes="(max-width: 768px) 100vw, 50vw"  // 响应式尺寸
+/>
+
+// 自动实现：
+// ✅ WebP/AVIF 格式转换（比 JPEG 小 25-50%）
+// ✅ 响应式图片（不同屏幕加载不同尺寸）
+// ✅ 懒加载（非首屏图片滚动到可视区才加载）
+// ✅ 缓存优化
+```
+
+### 3. 字体优化
+
+```tsx
+// ❌ 外部字体阻塞渲染
+<link href="https://fonts.googleapis.com/..." rel="stylesheet">
+
+// ✅ next/font 自动优化
+import { Inter } from 'next/font/google'
+const inter = Inter({ subsets: ['latin'], display: 'swap' })
+
+// 效果：
+// 构建时下载字体 → 自托管 → 零外部请求
+// font-display: swap → 先显示系统字体，字体加载后切换
+```
+
+### 4. Tree Shaking
+
+```typescript
+// ❌ 导入整个库
+import _ from 'lodash'          // 打包整个 lodash: 70KB
+_.debounce(fn, 300)
+
+// ✅ 按需导入
+import debounce from 'lodash/debounce'  // 只打包 debounce: 2KB
+
+// ✅ 使用支持 Tree Shaking 的库
+import { debounce } from 'lodash-es'    // ES Module，webpack 自动摇树
+```
+
+## 三、渲染性能优化
+
+### 1. 避免不必要的重渲染
+
+```tsx
+// React.memo：浅比较 props
+const ExpensiveList = React.memo(({ items }) => {
+  return items.map(item => <Item key={item.id} {...item} />)
+})
+
+// useMemo：缓存计算结果
+const sorted = useMemo(() =>
+  items.sort((a, b) => b.score - a.score),
+[items])
+
+// useCallback：缓存函数引用
+const handleClick = useCallback((id) => {
+  setSelected(id)
+}, [])
+```
+
+### 2. 虚拟列表（大数据量渲染）
+
+```tsx
+import { FixedSizeList } from 'react-window'
+
+// ❌ 直接渲染 10000 条数据 → 创建 10000 个 DOM 节点 → 卡顿
+{data.map(item => <Row key={item.id} {...item} />)}
+
+// ✅ 虚拟列表：只渲染可视区域内的 20-30 条
+<FixedSizeList
+  height={600}
+  itemCount={data.length}    // 10000 条数据
+  itemSize={50}              // 每行高度
+>
+  {({ index, style }) => (
+    <div style={style}>
+      {data[index].name}
+    </div>
+  )}
+</FixedSizeList>
+// 只渲染 ~15 个 DOM 节点，滚动时复用
+```
+
+### 3. 避免布局抖动（Layout Thrashing）
+
+```javascript
+// ❌ 读写交替 → 强制同步布局
+elements.forEach(el => {
+  const height = el.offsetHeight     // 读（触发布局计算）
+  el.style.height = height + 10 + 'px' // 写（使布局失效）
+  // 下一次读又触发重新计算...循环 N 次
+})
+
+// ✅ 批量读，批量写
+const heights = elements.map(el => el.offsetHeight)  // 统一读
+elements.forEach((el, i) => {
+  el.style.height = heights[i] + 10 + 'px'           // 统一写
+})
+```
+
+### 4. 防抖和节流
+
+```typescript
+// 防抖（Debounce）：停止触发后才执行
+// 适用：搜索输入、窗口 resize
+function debounce(fn: Function, delay: number) {
+  let timer: NodeJS.Timeout
+  return (...args: any[]) => {
+    clearTimeout(timer)
+    timer = setTimeout(() => fn(...args), delay)
+  }
+}
+
+// 节流（Throttle）：固定间隔执行一次
+// 适用：滚动事件、鼠标移动
+function throttle(fn: Function, interval: number) {
+  let last = 0
+  return (...args: any[]) => {
+    const now = Date.now()
+    if (now - last >= interval) {
+      last = now
+      fn(...args)
+    }
+  }
+}
+```
+
+## 四、构建优化
+
+### Bundle 分析
+
+```bash
+# 分析打包体积
+npx next build
+npx @next/bundle-analyzer
+
+# 或使用 webpack-bundle-analyzer
+ANALYZE=true npm run build
+```
+
+```
+分析结果示例：
+  ├── framework (react + react-dom): 130KB
+  ├── commons (shared chunks): 50KB
+  ├── pages/index: 25KB
+  ├── pages/blog: 15KB
+  └── node_modules:
+      ├── framer-motion: 32KB  ← 是否可以用 CSS 替代？
+      ├── date-fns: 12KB      ← 只用了 format，是否可以手写？
+      └── react-markdown: 20KB
+```
+
+### 依赖优化
+
+```javascript
+// next.config.js
+module.exports = {
+  experimental: {
+    optimizePackageImports: [
+      'lucide-react',      // 只打包用到的图标
+      'date-fns',          // 只打包用到的函数
+      'framer-motion',     // 只打包用到的 API
+    ],
+  },
+}
+```
+
+## 五、监控体系
+
+### Web Vitals 上报
+
+```typescript
+// lib/analytics.ts
+import { onCLS, onFID, onLCP, onFCP, onTTFB } from 'web-vitals'
+
+function reportMetric(metric) {
+  // 上报到你的分析平台
+  fetch('/api/analytics', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: metric.name,        // 'CLS' | 'FID' | 'LCP'
+      value: metric.value,      // 具体数值
+      rating: metric.rating,    // 'good' | 'needs-improvement' | 'poor'
+      navigationType: metric.navigationType,
+    }),
+  })
+}
+
+onCLS(reportMetric)
+onFID(reportMetric)
+onLCP(reportMetric)
+onFCP(reportMetric)
+onTTFB(reportMetric)
+```
+
+## 优化检查清单
+
+```
+网络层：
+  □ 启用 Brotli/Gzip 压缩
+  □ 使用 CDN 分发静态资源
+  □ 启用 HTTP/2
+  □ 配置合理的缓存策略
+  □ 关键资源 preload/preconnect
+
+资源加载：
+  □ 路由级代码分割
+  □ 图片格式优化（WebP/AVIF）
+  □ 图片懒加载
+  □ 字体自托管 + display:swap
+  □ Tree Shaking 验证
+
+渲染性能：
+  □ React.memo 避免无效渲染
+  □ useMemo/useCallback 合理使用
+  □ 虚拟列表处理大数据
+  □ 避免布局抖动
+
+构建优化：
+  □ Bundle 体积分析
+  □ 移除未使用依赖
+  □ 按需导入第三方库
+
+监控：
+  □ Core Web Vitals 采集上报
+  □ Lighthouse CI 定期检测
+  □ 性能预算告警
+```
+
+## 总结
+
+性能优化是一个**系统工程**，需要从网络、资源、渲染、构建四个层面综合考虑。核心原则是：先度量、再优化、持续监控。避免过早优化，用数据驱动决策。

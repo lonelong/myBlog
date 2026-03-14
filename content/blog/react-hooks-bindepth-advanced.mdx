@@ -1,0 +1,428 @@
+---
+title: "React Hooks 进阶：useCallback / useMemo / useContext / useRef"
+date: "2024-12-04"
+description: "深入理解 React 进阶 Hooks 的内部机制，搞懂它们什么时候该用、什么时候不该用"
+tags: ["React", "Hooks", "useCallback", "useMemo", "useContext"]
+cover: "/images/react-hooks-advanced.png"
+---
+
+## useCallback：缓存函数引用
+
+### 调用时机
+
+每次渲染时都会调用，但只有依赖变化时才返回**新的函数引用**。
+
+### React 内部做了什么
+
+```tsx
+const handleClick = useCallback(() => {
+  console.log(count)
+}, [count])
+```
+
+```javascript
+// Mount 阶段
+function mountCallback(callback, deps) {
+  const hook = createHook()
+  hook.memoizedState = [callback, deps]  // 存储函数和依赖
+  return callback
+}
+
+// Update 阶段
+function updateCallback(callback, deps) {
+  const hook = getCurrentHook()
+  const [prevCallback, prevDeps] = hook.memoizedState
+
+  if (areEqual(prevDeps, deps)) {
+    return prevCallback  // 依赖没变 → 返回上次的函数（同一个引用）
+  }
+
+  hook.memoizedState = [callback, deps]
+  return callback  // 依赖变了 → 返回新函数
+}
+```
+
+### 什么时候该用？
+
+```tsx
+// ✅ 场景1：传给 memo 化的子组件
+const MemoChild = React.memo(({ onClick }) => {
+  console.log('子组件渲染')
+  return <button onClick={onClick}>Click</button>
+})
+
+function Parent() {
+  const [count, setCount] = useState(0)
+
+  // 不用 useCallback → 每次渲染都生成新函数 → MemoChild 白白重渲染
+  // const handleClick = () => { doSomething() }
+
+  // ✅ 用 useCallback → 函数引用稳定 → MemoChild 不会重渲染
+  const handleClick = useCallback(() => {
+    doSomething()
+  }, [])
+
+  return (
+    <>
+      <div>{count}</div>
+      <MemoChild onClick={handleClick} />
+    </>
+  )
+}
+
+// ✅ 场景2：作为 useEffect 的依赖
+function SearchComponent({ query }) {
+  const fetchResults = useCallback(async () => {
+    const res = await fetch(`/api/search?q=${query}`)
+    return res.json()
+  }, [query])
+
+  useEffect(() => {
+    fetchResults().then(setResults)
+  }, [fetchResults])  // fetchResults 稳定，不会无限循环
+}
+
+// ❌ 不需要 useCallback 的场景
+function SimpleComponent() {
+  // 这个组件没有 memo 化的子组件，useCallback 纯属浪费
+  const handleClick = useCallback(() => {
+    console.log('clicked')
+  }, [])
+  // 直接写就行：
+  // const handleClick = () => { console.log('clicked') }
+}
+```
+
+## useMemo：缓存计算结果
+
+### 调用时机
+
+每次渲染时调用，但只有依赖变化时才**重新执行计算函数**。
+
+### React 内部做了什么
+
+```tsx
+const sortedList = useMemo(() => {
+  return items.sort((a, b) => a.name.localeCompare(b.name))
+}, [items])
+```
+
+```javascript
+// Mount 阶段
+function mountMemo(factory, deps) {
+  const hook = createHook()
+  const value = factory()  // 执行计算
+  hook.memoizedState = [value, deps]
+  return value
+}
+
+// Update 阶段
+function updateMemo(factory, deps) {
+  const hook = getCurrentHook()
+  const [prevValue, prevDeps] = hook.memoizedState
+
+  if (areEqual(prevDeps, deps)) {
+    return prevValue  // 依赖没变 → 直接返回缓存值
+  }
+
+  const value = factory()  // 依赖变了 → 重新计算
+  hook.memoizedState = [value, deps]
+  return value
+}
+```
+
+### useMemo vs useCallback
+
+```tsx
+// 这两个完全等价：
+useCallback(fn, deps)
+useMemo(() => fn, deps)
+
+// useCallback 是 useMemo 的语法糖
+// useCallback 缓存的是"函数本身"
+// useMemo 缓存的是"函数的返回值"
+```
+
+### 什么时候该用？
+
+```tsx
+// ✅ 计算量大的操作
+function DataTable({ data, filter }) {
+  const filteredData = useMemo(() => {
+    // 假设 data 有 10000 条，过滤 + 排序很耗时
+    return data
+      .filter(item => item.name.includes(filter))
+      .sort((a, b) => b.score - a.score)
+  }, [data, filter])
+
+  return <Table data={filteredData} />
+}
+
+// ✅ 保持引用稳定（避免子组件重渲染）
+function Parent() {
+  const [count, setCount] = useState(0)
+
+  // 每次渲染都会创建新对象 → 子组件认为 props 变了
+  // const style = { color: 'red', fontSize: 16 }
+
+  // ✅ 引用稳定
+  const style = useMemo(() => ({ color: 'red', fontSize: 16 }), [])
+
+  return <MemoChild style={style} />
+}
+
+// ❌ 不需要 useMemo 的场景
+function Simple({ a, b }) {
+  // 简单的加法运算，useMemo 的开销比计算本身还大
+  const sum = useMemo(() => a + b, [a, b])
+  // 直接写：const sum = a + b
+}
+```
+
+## useContext：跨层级状态共享
+
+### 调用时机
+
+每次渲染时调用。当 Context 的值变化时，**所有消费该 Context 的组件都会重新渲染**。
+
+### React 内部做了什么
+
+```tsx
+// 1. 创建 Context
+const ThemeContext = React.createContext('light')
+
+// 2. 提供值
+function App() {
+  const [theme, setTheme] = useState('dark')
+  return (
+    <ThemeContext.Provider value={theme}>
+      <Page />
+    </ThemeContext.Provider>
+  )
+}
+
+// 3. 消费值
+function Button() {
+  const theme = useContext(ThemeContext)
+  return <button className={theme}>Click</button>
+}
+```
+
+```javascript
+// React 内部（简化）
+function useContext(context) {
+  // 1. 从 Fiber 树上往上查找最近的 Provider
+  const provider = findNearestProvider(currentFiber, context)
+
+  // 2. 读取 Provider 的当前值
+  const value = provider ? provider.value : context._defaultValue
+
+  // 3. 建立订阅：当 Provider 值变化时，标记当前组件需要更新
+  subscribeToContext(currentFiber, context)
+
+  return value
+}
+```
+
+### 性能问题和优化
+
+```tsx
+// ❌ Context 值变化 → 所有消费者都重渲染，即使它们只用了其中一部分
+const AppContext = createContext({ user: null, theme: 'dark', locale: 'zh' })
+
+function UserName() {
+  const { user } = useContext(AppContext)  // 只用了 user
+  // 但 theme 变化时，这个组件也会重渲染！
+  return <div>{user?.name}</div>
+}
+
+// ✅ 方案1：拆分 Context
+const UserContext = createContext(null)
+const ThemeContext = createContext('dark')
+
+// ✅ 方案2：用 useMemo 包裹 value
+function AppProvider({ children }) {
+  const [user, setUser] = useState(null)
+  const [theme, setTheme] = useState('dark')
+
+  // 只有 user 变化时才创建新的 userValue 对象
+  const userValue = useMemo(() => ({ user, setUser }), [user])
+  const themeValue = useMemo(() => ({ theme, setTheme }), [theme])
+
+  return (
+    <UserContext.Provider value={userValue}>
+      <ThemeContext.Provider value={themeValue}>
+        {children}
+      </ThemeContext.Provider>
+    </UserContext.Provider>
+  )
+}
+
+// ✅ 方案3：消费端用 memo 隔离
+const UserName = React.memo(function UserName({ name }) {
+  return <div>{name}</div>
+})
+
+function UserNameContainer() {
+  const { user } = useContext(UserContext)
+  return <UserName name={user?.name} />
+}
+```
+
+## useRef：可变引用容器
+
+### 调用时机
+
+每次渲染时调用，但**永远返回同一个对象**。修改 `.current` 不会触发重渲染。
+
+### React 内部做了什么
+
+```tsx
+const inputRef = useRef(null)
+const countRef = useRef(0)
+```
+
+```javascript
+// Mount 阶段
+function mountRef(initialValue) {
+  const hook = createHook()
+  const ref = { current: initialValue }
+  hook.memoizedState = ref
+  return ref  // 返回一个普通对象 { current: initialValue }
+}
+
+// Update 阶段
+function updateRef() {
+  const hook = getCurrentHook()
+  return hook.memoizedState  // 直接返回同一个对象，就这么简单
+}
+```
+
+### 三大用途
+
+```tsx
+// 1️⃣ 访问 DOM 元素
+function TextInput() {
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const focusInput = () => {
+    inputRef.current?.focus()
+  }
+
+  return <input ref={inputRef} />
+}
+
+// 2️⃣ 保存不需要触发渲染的可变值
+function StopWatch() {
+  const [time, setTime] = useState(0)
+  const timerRef = useRef<NodeJS.Timeout | null>(null)
+
+  const start = () => {
+    timerRef.current = setInterval(() => {
+      setTime(prev => prev + 1)
+    }, 1000)
+  }
+
+  const stop = () => {
+    if (timerRef.current) clearInterval(timerRef.current)
+  }
+
+  return <div>{time}s</div>
+}
+
+// 3️⃣ 记录上一次的值
+function usePrevious<T>(value: T): T | undefined {
+  const ref = useRef<T>()
+
+  useEffect(() => {
+    ref.current = value  // effect 在渲染后执行
+  })
+
+  return ref.current  // 渲染时返回的还是上次的值
+}
+
+function Counter() {
+  const [count, setCount] = useState(0)
+  const prevCount = usePrevious(count)
+  // count = 5, prevCount = 4
+}
+```
+
+### useRef vs useState
+
+| 特性 | useState | useRef |
+|------|----------|--------|
+| 修改后触发渲染 | ✅ 是 | ❌ 否 |
+| 渲染间保持值 | ✅ 是 | ✅ 是 |
+| 渲染中读到最新值 | ❌ 下次渲染才是新值 | ✅ 立即是新值 |
+| 适用场景 | UI 相关的状态 | 定时器 ID、DOM、上一次值 |
+
+## 自定义 Hook：组合的力量
+
+自定义 Hook 就是把多个基础 Hook 组合起来，提取可复用的逻辑：
+
+```tsx
+// 自定义 Hook：窗口大小监听
+function useWindowSize() {
+  const [size, setSize] = useState({ width: 0, height: 0 })
+
+  useLayoutEffect(() => {
+    const handleResize = () => {
+      setSize({ width: window.innerWidth, height: window.innerHeight })
+    }
+
+    handleResize()  // 初始化
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  return size
+}
+
+// 自定义 Hook：防抖值
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState(value)
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedValue(value), delay)
+    return () => clearTimeout(timer)
+  }, [value, delay])
+
+  return debouncedValue
+}
+
+// 使用
+function SearchPage() {
+  const [query, setQuery] = useState('')
+  const debouncedQuery = useDebounce(query, 300)
+  const { width } = useWindowSize()
+
+  useEffect(() => {
+    if (debouncedQuery) {
+      searchAPI(debouncedQuery)
+    }
+  }, [debouncedQuery])
+}
+```
+
+## 总结：Hooks 选择决策树
+
+```
+需要什么？
+  │
+  ├─ 渲染相关的状态 → useState
+  │
+  ├─ 副作用（请求/订阅/DOM） → useEffect / useLayoutEffect
+  │    └─ 需要在绘制前执行？ → useLayoutEffect
+  │    └─ 不需要 → useEffect
+  │
+  ├─ 缓存函数引用 → useCallback（传给 memo 子组件时用）
+  │
+  ├─ 缓存计算结果 → useMemo（计算量大时用）
+  │
+  ├─ 跨层级状态 → useContext（配合拆分 Context 优化性能）
+  │
+  ├─ 不触发渲染的可变值 → useRef
+  │
+  └─ 访问 DOM → useRef + ref 属性
+```

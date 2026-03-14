@@ -1,0 +1,327 @@
+---
+title: "控制反转（IoC）与依赖注入（DI）：从原理到前端实践"
+date: "2024-11-08"
+description: "深入理解控制反转的设计思想，以及它在 React、Angular 和 Node.js 中的实际应用"
+tags: ["设计模式", "IoC", "依赖注入", "前端架构"]
+cover: "/images/ioc.png"
+---
+
+## 什么是控制反转
+
+控制反转（Inversion of Control，IoC）不是一种具体的技术，而是一种**设计原则**。它的核心思想是：
+
+> **不要自己去找依赖，让依赖来找你。**
+
+```javascript
+// ❌ 传统方式：我主动创建依赖（"我控制"）
+class UserService {
+  constructor() {
+    this.db = new MySQL({ host: 'localhost', port: 3306 })  // 自己创建
+    this.cache = new Redis({ host: 'localhost', port: 6379 }) // 自己创建
+    this.logger = new FileLogger('/var/log/app.log')          // 自己创建
+  }
+}
+
+// ✅ 控制反转：依赖由外部注入（"框架控制"）
+class UserService {
+  constructor(db, cache, logger) {  // 外部传入
+    this.db = db
+    this.cache = cache
+    this.logger = logger
+  }
+}
+```
+
+"控制"指的是**创建和管理依赖的控制权**。反转前，组件自己管理；反转后，交给外部（容器/框架）管理。
+
+## 为什么需要控制反转
+
+### 问题：高耦合
+
+```javascript
+// ❌ UserService 直接依赖 MySQL
+class UserService {
+  constructor() {
+    this.db = new MySQL()  // 硬编码依赖
+  }
+
+  async getUser(id) {
+    return this.db.query('SELECT * FROM users WHERE id = ?', [id])
+  }
+}
+
+// 问题1：想换成 PostgreSQL？→ 要改 UserService 的代码
+// 问题2：想单元测试？→ 必须连真实数据库
+// 问题3：想在不同环境用不同配置？→ 改代码
+```
+
+### 解决：依赖注入
+
+```javascript
+// ✅ 定义接口（抽象）
+interface Database {
+  query(sql: string, params: any[]): Promise<any>
+}
+
+// ✅ UserService 依赖接口，不依赖具体实现
+class UserService {
+  constructor(private db: Database) {}  // 注入
+
+  async getUser(id: string) {
+    return this.db.query('SELECT * FROM users WHERE id = ?', [id])
+  }
+}
+
+// 正式环境
+const service = new UserService(new MySQL(prodConfig))
+
+// 测试环境
+const service = new UserService(new MockDB())
+
+// 换数据库
+const service = new UserService(new PostgreSQL(config))
+```
+
+## IoC 的三种实现方式
+
+### 1. 依赖注入（Dependency Injection）
+
+最常见的 IoC 实现方式：
+
+```typescript
+// 构造函数注入
+class OrderService {
+  constructor(
+    private userService: UserService,
+    private paymentService: PaymentService,
+    private emailService: EmailService,
+  ) {}
+}
+
+// 属性注入（装饰器方式，Angular/NestJS）
+class OrderService {
+  @Inject(UserService)
+  private userService: UserService
+
+  @Inject(PaymentService)
+  private paymentService: PaymentService
+}
+
+// 接口注入（setter 方式）
+class OrderService {
+  setUserService(service: UserService) {
+    this.userService = service
+  }
+}
+```
+
+### 2. 依赖查找（Dependency Lookup）
+
+组件主动从容器中查找依赖：
+
+```typescript
+class OrderService {
+  private userService: UserService
+
+  constructor(container: Container) {
+    this.userService = container.get(UserService)  // 主动查找
+  }
+}
+```
+
+### 3. 模板方法模式
+
+框架定义流程骨架，你填充具体步骤：
+
+```typescript
+// React 就是控制反转的典型例子！
+// React 控制了渲染流程，你只提供组件
+
+function MyComponent() {
+  // 你不需要自己调用 DOM API
+  // React 控制什么时候渲染、怎么渲染
+  return <div>Hello</div>
+}
+
+// 你没有调用 React，是 React 在调用你的组件
+// 这就是"控制反转"
+```
+
+## IoC 容器
+
+IoC 容器是管理所有依赖关系的"大管家"：
+
+```typescript
+// 简单的 IoC 容器实现
+class Container {
+  private registry = new Map<string, { factory: Function, singleton: boolean }>()
+  private instances = new Map<string, any>()
+
+  // 注册服务
+  register<T>(token: string, factory: () => T, singleton = true) {
+    this.registry.set(token, { factory, singleton })
+  }
+
+  // 获取服务
+  resolve<T>(token: string): T {
+    const registration = this.registry.get(token)
+    if (!registration) throw new Error(`未注册: ${token}`)
+
+    // 单例模式：返回缓存实例
+    if (registration.singleton) {
+      if (!this.instances.has(token)) {
+        this.instances.set(token, registration.factory())
+      }
+      return this.instances.get(token)
+    }
+
+    // 非单例：每次创建新实例
+    return registration.factory()
+  }
+}
+
+// 使用
+const container = new Container()
+
+container.register('Database', () => new MySQL(config))
+container.register('Cache', () => new Redis(config))
+container.register('UserService', () => new UserService(
+  container.resolve('Database'),
+  container.resolve('Cache'),
+))
+
+const userService = container.resolve<UserService>('UserService')
+```
+
+## 前端中的 IoC 实践
+
+### React Context = IoC 容器
+
+```tsx
+// React 的 Context 就是一个轻量级 IoC 容器
+
+// 1. 注册服务（Provider）
+const ThemeContext = createContext<Theme>('light')
+const AuthContext = createContext<AuthState | null>(null)
+
+function App() {
+  return (
+    <ThemeContext.Provider value="dark">
+      <AuthContext.Provider value={{ user, login, logout }}>
+        <Page />
+      </AuthContext.Provider>
+    </ThemeContext.Provider>
+  )
+}
+
+// 2. 消费服务（注入）
+function Button() {
+  const theme = useContext(ThemeContext)  // 依赖注入！
+  const auth = useContext(AuthContext)    // 依赖注入！
+  // Button 不知道 theme 从哪来，也不关心
+}
+```
+
+### React 的 Hooks 就是控制反转
+
+```tsx
+// 你不控制状态的存储方式
+const [count, setCount] = useState(0)
+// React 控制 state 存在哪里（Fiber 节点上）
+// React 控制什么时候重新渲染
+// React 控制批量更新的时机
+
+// 你不控制副作用的执行时机
+useEffect(() => {
+  // 你只提供"做什么"
+  fetchData()
+}, [id])
+// React 控制"什么时候做"（commit 之后、paint 之后）
+// React 控制"是否要做"（依赖没变就跳过）
+```
+
+### Angular 的完整 DI 系统
+
+```typescript
+// Angular 有最完善的前端 DI 系统
+
+@Injectable({ providedIn: 'root' })  // 注册到根容器
+class UserService {
+  constructor(
+    private http: HttpClient,      // Angular 自动注入
+    private auth: AuthService,     // Angular 自动注入
+  ) {}
+}
+
+@Component({
+  selector: 'app-user-list',
+  template: `<div *ngFor="let u of users">{{u.name}}</div>`,
+})
+class UserListComponent {
+  constructor(private userService: UserService) {}  // 自动注入
+}
+```
+
+### NestJS 的 DI 容器
+
+```typescript
+// NestJS（Node.js 后端）完全基于 IoC/DI
+
+@Injectable()
+class UserService {
+  constructor(
+    @InjectRepository(User) private userRepo: Repository<User>,
+    private cacheService: CacheService,
+  ) {}
+
+  async findAll() {
+    const cached = await this.cacheService.get('users')
+    if (cached) return cached
+    return this.userRepo.find()
+  }
+}
+
+@Controller('users')
+class UserController {
+  constructor(private userService: UserService) {}  // 自动注入
+
+  @Get()
+  findAll() {
+    return this.userService.findAll()
+  }
+}
+
+@Module({
+  controllers: [UserController],
+  providers: [UserService, CacheService],  // 注册到 IoC 容器
+})
+class UserModule {}
+```
+
+## IoC 的核心好处
+
+```
+1. 解耦
+   组件不再直接创建依赖 → 更容易替换、扩展
+
+2. 可测试
+   测试时注入 Mock 对象 → 不需要真实数据库/网络
+
+3. 可配置
+   不同环境注入不同实现 → 无需改代码
+
+4. 关注点分离
+   组件只关心"用什么" → 不关心"怎么创建"
+
+5. 生命周期管理
+   容器统一管理创建、缓存、销毁 → 避免内存泄漏
+```
+
+## 总结
+
+控制反转不是某个具体的 API，而是贯穿整个软件设计的思想：
+
+- **React 的整个组件模型**就是控制反转（你写组件，React 控制渲染）
+- **useContext** 是 React 中的依赖注入机制
+- **Angular/NestJS** 提供了完整的 IoC 容器和装饰器语法
+- **核心原则**：依赖抽象（接口），不依赖具体实现

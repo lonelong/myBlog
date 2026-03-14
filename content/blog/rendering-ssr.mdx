@@ -1,0 +1,271 @@
+---
+title: "SSR 服务端渲染：原理、流程与 Next.js 实现"
+date: "2024-11-26"
+description: "深入理解 SSR（Server-Side Rendering）的工作原理，从 HTML 生成到 Hydration 的完整流程"
+tags: ["SSR", "渲染模式", "Next.js", "前端架构"]
+cover: "/images/ssr.png"
+---
+
+## 什么是 SSR
+
+SSR（Server-Side Rendering，服务端渲染）是指**每次用户请求时，服务器实时执行 React 组件代码，生成完整的 HTML 字符串返回给浏览器**。用户立即看到内容，然后 JS 加载完成后"接管"页面的交互能力。
+
+## SSR 的完整流程
+
+```
+用户请求 https://example.com/users
+        │
+        ▼
+┌────────────────────────────────────────────────────────┐
+│                     服务器端                              │
+│                                                         │
+│  1. 接收请求 /users                                      │
+│  2. 调用 API 获取数据 → [{ name: "Alice" }, ...]        │
+│  3. 执行 React 组件：renderToString(<App data={data}/>) │
+│  4. 生成完整 HTML 字符串                                  │
+└────────────────────┬───────────────────────────────────┘
+                     │
+                     ▼  服务器返回完整 HTML
+┌────────────────────────────────────────────────────────┐
+│ <!DOCTYPE html>                                         │
+│ <html>                                                  │
+│   <body>                                                │
+│     <div id="root">                                     │
+│       <h1>用户列表</h1>                                  │
+│       <ul>                                              │
+│         <li>Alice</li>        ← 已有真实内容！            │
+│         <li>Bob</li>                                    │
+│       </ul>                                             │
+│     </div>                                              │
+│     <script src="/bundle.js"></script>                   │
+│   </body>                                               │
+│ </html>                                                 │
+└────────────────────┬───────────────────────────────────┘
+                     │
+                     ▼  用户立即看到内容 ✅（但还不能交互）
+                     │
+                     │  下载 JS bundle
+                     │
+                     ▼  JS 下载完成
+                     │
+                     │  Hydration（水合）：
+                     │  React 接管已有的 DOM，
+                     │  绑定事件监听器
+                     │
+                     ▼  页面完全可交互 ✅
+```
+
+### 时间线对比（SSR vs CSR）
+
+```
+CSR:
+0ms     200ms      800ms      1500ms     2500ms
+│        │          │           │          │
+▼        ▼          ▼           ▼          ▼
+请求    HTML到达    JS下载完    首次渲染     完整渲染
+        ├── 白屏 ──────────────┤
+
+SSR:
+0ms     200ms      500ms       1200ms
+│        │          │            │
+▼        ▼          ▼            ▼
+请求    HTML到达    看到内容      JS加载完
+        (FCP!)     (已有内容)    (可交互 TTI)
+        ├ 可见 ┤
+```
+
+## Hydration（水合）详解
+
+Hydration 是 SSR 的核心概念，也是最容易出问题的地方。
+
+```
+服务端渲染的 HTML（静态，无交互）：
+┌──────────────────────────┐
+│ <button>点击 0 次</button> │  ← 只是纯 HTML，点击无反应
+└──────────────────────────┘
+
+          Hydration 过程
+               │
+               ▼
+
+水合后的页面（有交互）：
+┌──────────────────────────┐
+│ <button>点击 0 次</button> │  ← 绑定了 onClick 事件
+│   onClick={handleClick}   │
+│   state = { count: 0 }   │
+└──────────────────────────┘
+```
+
+### Hydration 的步骤
+
+```javascript
+// React 水合的内部流程（简化）
+function hydrate(component, container) {
+  // 1. 不会清空 container 的 DOM（这是和 render 的区别）
+  // 2. 遍历已有的 DOM 节点
+  // 3. 将 React 组件树和 DOM 节点一一对应
+  // 4. 绑定事件监听器
+  // 5. 如果 DOM 和组件不匹配 → 发出警告（Hydration Mismatch）
+}
+```
+
+### 水合不匹配问题
+
+```tsx
+// ❌ 会导致 Hydration Mismatch
+function TimeDisplay() {
+  // 服务端执行时：new Date() = "10:00:00"
+  // 客户端执行时：new Date() = "10:00:02"
+  return <div>{new Date().toLocaleTimeString()}</div>
+  // 服务端 HTML: <div>10:00:00</div>
+  // 客户端期望: <div>10:00:02</div>
+  // → Mismatch Warning!
+}
+
+// ✅ 正确做法：客户端挂载后再显示时间
+function TimeDisplay() {
+  const [mounted, setMounted] = useState(false)
+  const [time, setTime] = useState('')
+
+  useEffect(() => {
+    setMounted(true)
+    setTime(new Date().toLocaleTimeString())
+  }, [])
+
+  if (!mounted) return <div>--:--:--</div>  // 服务端和客户端首次渲染一致
+  return <div>{time}</div>
+}
+```
+
+## Next.js 中的 SSR 实现
+
+### App Router（推荐）
+
+```tsx
+// app/users/page.tsx — 默认就是服务端组件
+
+// 这个函数在服务端执行，每次请求时运行
+async function UsersPage() {
+  // 直接在组件中 fetch 数据（服务端执行）
+  const res = await fetch('https://api.example.com/users', {
+    cache: 'no-store',  // 关键：no-store = 每次请求都重新获取 = SSR
+  })
+  const users = await res.json()
+
+  return (
+    <div>
+      <h1>用户列表</h1>
+      <ul>
+        {users.map(user => (
+          <li key={user.id}>{user.name}</li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+export default UsersPage
+```
+
+### Pages Router（旧版）
+
+```tsx
+// pages/users.tsx
+
+export async function getServerSideProps(context) {
+  const res = await fetch('https://api.example.com/users')
+  const users = await res.json()
+
+  return {
+    props: { users },  // 传递给组件
+  }
+}
+
+function UsersPage({ users }) {
+  return (
+    <ul>
+      {users.map(user => <li key={user.id}>{user.name}</li>)}
+    </ul>
+  )
+}
+```
+
+## SSR 的优缺点
+
+### 优点
+
+| 优点 | 说明 |
+|------|------|
+| **首屏速度快** | 用户立即看到内容，FCP 优秀 |
+| **SEO 友好** | 爬虫直接获得完整 HTML |
+| **社交分享** | 分享链接时能正确显示预览 |
+| **首次有意义内容快** | 不需要等 JS 下载和执行 |
+
+### 缺点
+
+| 缺点 | 说明 |
+|------|------|
+| **服务器压力大** | 每次请求都要执行渲染 |
+| **TTFB 较长** | 服务器需要时间准备 HTML |
+| **TTI 延迟** | 看到内容到可以交互有时间差 |
+| **开发复杂度** | 需要处理 Hydration 不匹配 |
+| **基础设施要求** | 需要 Node.js 服务器，不能纯静态部署 |
+
+## React 18 的流式 SSR
+
+传统 SSR 必须等所有数据到齐才能返回 HTML。React 18 引入了**流式 SSR**：
+
+```
+传统 SSR:
+  服务器: [获取数据A] [获取数据B] [渲染HTML] → 一次性发送
+  浏览器:  ────等待──────────────────────── 收到完整HTML
+
+流式 SSR (React 18):
+  服务器: [渲染HTML外壳] → 立即发送
+          [获取数据A] [渲染A] → 追加发送
+          [获取数据B] [渲染B] → 追加发送
+  浏览器: 收到外壳 → 显示  → 收到A → 更新 → 收到B → 更新
+```
+
+```tsx
+// Next.js App Router 自动支持流式 SSR
+import { Suspense } from 'react'
+
+async function SlowComponent() {
+  const data = await fetch('/api/slow')  // 耗时 3 秒
+  return <div>{data}</div>
+}
+
+export default function Page() {
+  return (
+    <div>
+      <h1>立即显示的标题</h1>
+      <Suspense fallback={<Loading />}>
+        <SlowComponent />  {/* 3 秒后流式推送到客户端 */}
+      </Suspense>
+    </div>
+  )
+}
+// 用户立即看到标题和 Loading，3秒后 Loading 被替换为真实内容
+```
+
+## 适用场景
+
+```
+✅ 适合 SSR：
+  ├── 需要 SEO 的动态内容页面
+  ├── 电商商品详情页（价格实时变化 + 需要 SEO）
+  ├── 社交媒体的 Feed 流
+  ├── 新闻/资讯网站
+  └── 需要个性化内容（用户信息、推荐）
+
+❌ 不适合 SSR：
+  ├── 纯静态内容（用 SSG 更好）
+  ├── 高并发场景（服务器扛不住）
+  ├── 不需要 SEO 的内部系统
+  └── 交互为主、内容为辅的应用
+```
+
+## 总结
+
+SSR 解决了 CSR 的白屏和 SEO 问题，代价是更高的服务器负担和开发复杂度。React 18 的流式 SSR 和 Suspense 大幅改善了传统 SSR 的 TTFB 问题，是当前 Web 应用的主流渲染方案之一。

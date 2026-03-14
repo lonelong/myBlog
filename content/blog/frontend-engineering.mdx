@@ -1,0 +1,459 @@
+---
+title: "前端工程化实践：从规范到自动化的完整体系"
+date: "2024-10-25"
+description: "系统性梳理前端工程化的核心实践，涵盖代码规范、构建工具、模块化、Monorepo、微前端等具体问题"
+tags: ["工程化", "前端", "Webpack", "Monorepo", "微前端"]
+cover: "/images/engineering.png"
+---
+
+## 什么是前端工程化
+
+前端工程化是用软件工程的方法来管理前端项目，解决**效率、质量、协作**三大问题：
+
+```
+代码层面：规范 → 格式化 → 类型检查 → 测试
+构建层面：打包 → 压缩 → 优化 → 产物分析
+流程层面：Git 规范 → Code Review → CI/CD → 监控
+架构层面：模块化 → 组件化 → Monorepo → 微前端
+```
+
+## 一、代码规范体系
+
+### ESLint + Prettier + TypeScript 三件套
+
+```
+ESLint：检查代码逻辑问题（未使用变量、不安全操作...）
+Prettier：统一代码格式（缩进、引号、分号...）
+TypeScript：类型安全
+
+三者配合：
+  Prettier → 管格式（怎么排版）
+  ESLint → 管逻辑（怎么写才对）
+  TypeScript → 管类型（数据结构对不对）
+```
+
+```json
+// .eslintrc.json
+{
+  "extends": [
+    "next/core-web-vitals",
+    "plugin:@typescript-eslint/recommended",
+    "prettier"  // 关闭与 Prettier 冲突的 ESLint 规则
+  ],
+  "rules": {
+    "no-console": "warn",
+    "@typescript-eslint/no-unused-vars": "error",
+    "react-hooks/exhaustive-deps": "warn"
+  }
+}
+```
+
+```json
+// .prettierrc
+{
+  "semi": false,
+  "singleQuote": true,
+  "tabWidth": 2,
+  "trailingComma": "es5",
+  "printWidth": 100
+}
+```
+
+### Git Hooks 自动化
+
+```bash
+# 安装 husky + lint-staged
+npm install -D husky lint-staged
+
+# 初始化 husky
+npx husky init
+```
+
+```json
+// package.json
+{
+  "lint-staged": {
+    "*.{ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,css}": [
+      "prettier --write"
+    ]
+  }
+}
+```
+
+```bash
+# .husky/pre-commit
+npx lint-staged
+
+# .husky/commit-msg
+npx commitlint --edit $1
+```
+
+效果：每次 `git commit` 时，自动对暂存文件执行 ESLint + Prettier，不通过则阻止提交。
+
+### Commit 规范
+
+```bash
+# commitlint.config.js
+module.exports = {
+  extends: ['@commitlint/config-conventional'],
+  rules: {
+    'type-enum': [2, 'always', [
+      'feat',     // 新功能
+      'fix',      // 修复 bug
+      'docs',     // 文档
+      'style',    // 格式（不影响代码）
+      'refactor', // 重构
+      'perf',     // 性能优化
+      'test',     // 测试
+      'chore',    // 构建/工具
+      'ci',       // CI 配置
+    ]],
+  },
+}
+```
+
+```bash
+# ✅ 合法
+git commit -m "feat: add user authentication"
+git commit -m "fix: resolve login timeout issue"
+
+# ❌ 不合法（被 hook 拦截）
+git commit -m "update code"
+git commit -m "fix bug"
+```
+
+## 二、构建工具链
+
+### Webpack vs Vite vs Turbopack
+
+```
+Webpack（成熟稳定）：
+  ├── Bundle-based：先打包整个应用，再启动
+  ├── 冷启动慢（大项目 30s+）
+  ├── 生态最丰富（loader/plugin）
+  └── Next.js 默认使用
+
+Vite（开发快）：
+  ├── ESM-based：利用浏览器原生 ES Module
+  ├── 冷启动快（毫秒级）
+  ├── HMR 快（只更新变化的模块）
+  └── 生产用 Rollup 打包
+
+Turbopack（Next.js 新引擎）：
+  ├── Rust 编写，极致性能
+  ├── 增量计算，只重新编译变化的部分
+  └── Next.js 14+ 实验性支持
+```
+
+### 构建优化实战
+
+```javascript
+// next.config.js
+const withBundleAnalyzer = require('@next/bundle-analyzer')({
+  enabled: process.env.ANALYZE === 'true',
+})
+
+module.exports = withBundleAnalyzer({
+  // 1. SWC 编译（比 Babel 快 20 倍）
+  // Next.js 默认使用，无需配置
+
+  // 2. 图片优化
+  images: {
+    formats: ['image/avif', 'image/webp'],
+  },
+
+  // 3. 包导入优化
+  experimental: {
+    optimizePackageImports: ['lucide-react', 'date-fns'],
+  },
+
+  // 4. 压缩
+  swcMinify: true,  // SWC 压缩（比 Terser 快 7 倍）
+})
+```
+
+## 三、模块化方案
+
+### ESM vs CommonJS
+
+```javascript
+// CommonJS（Node.js 传统方式）
+const fs = require('fs')          // 运行时加载
+module.exports = { readFile }     // 运行时导出
+// 特点：同步加载、无法 Tree Shaking
+
+// ES Module（现代标准）
+import { readFile } from 'fs'     // 编译时静态分析
+export { readFile }               // 编译时确定导出
+// 特点：异步加载、支持 Tree Shaking、浏览器原生支持
+```
+
+### Path Alias（路径别名）
+
+```json
+// tsconfig.json
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@/components/*": ["src/components/*"],
+      "@/lib/*": ["src/lib/*"],
+      "@/types/*": ["src/types/*"]
+    }
+  }
+}
+```
+
+```typescript
+// ❌ 相对路径地狱
+import { Button } from '../../../components/ui/Button'
+
+// ✅ 路径别名
+import { Button } from '@/components/ui/Button'
+```
+
+## 四、Monorepo
+
+当项目变大、团队变多时，需要 Monorepo 来管理多个包：
+
+```
+my-project/
+├── apps/
+│   ├── web/           # Next.js 主站
+│   ├── admin/         # 后台管理
+│   └── mobile/        # React Native
+│
+├── packages/
+│   ├── ui/            # 共享 UI 组件库
+│   ├── utils/         # 共享工具函数
+│   ├── config/        # 共享配置（ESLint、TS）
+│   └── types/         # 共享类型定义
+│
+├── package.json       # 根 package.json
+├── pnpm-workspace.yaml
+└── turbo.json         # Turborepo 配置
+```
+
+```yaml
+# pnpm-workspace.yaml
+packages:
+  - 'apps/*'
+  - 'packages/*'
+```
+
+```json
+// turbo.json — 构建编排
+{
+  "$schema": "https://turbo.build/schema.json",
+  "pipeline": {
+    "build": {
+      "dependsOn": ["^build"],  // 先构建依赖的包
+      "outputs": [".next/**", "dist/**"]
+    },
+    "lint": {},
+    "test": {
+      "dependsOn": ["build"]
+    }
+  }
+}
+```
+
+```
+Turborepo 的优势：
+  1. 任务编排：自动分析依赖关系，并行构建
+  2. 缓存：相同输入不重新构建
+  3. 远程缓存：团队共享构建缓存
+
+  首次构建: 全部 packages 编译 → 120s
+  第二次（缓存命中）: → 3s 🚀
+```
+
+## 五、微前端
+
+当单体前端太大、需要多团队独立开发部署时：
+
+```
+                    主应用（基座）
+                   ┌────────────────────────────────┐
+                   │  Header  │  Sidebar             │
+                   │──────────┤                      │
+                   │          │  ┌──────────────────┐│
+                   │  导航    │  │  子应用 A (React)  ││
+                   │          │  │  团队 A 独立开发    ││
+                   │          │  │  独立部署           ││
+                   │          │  └──────────────────┘│
+                   │          │  ┌──────────────────┐│
+                   │          │  │  子应用 B (Vue)    ││
+                   │          │  │  团队 B 独立开发    ││
+                   │          │  └──────────────────┘│
+                   └────────────────────────────────┘
+```
+
+### 主流方案
+
+```
+qiankun（蚂蚁）：
+  基于 single-spa，JS 沙箱 + 样式隔离
+  适合：已有多个独立项目需要整合
+
+Module Federation（Webpack 5）：
+  模块级共享，运行时加载远程模块
+  适合：共享组件/模块，不是完整应用
+
+iframe：
+  最简单的隔离方案
+  适合：对隔离性要求高、交互少的场景
+
+Web Components：
+  浏览器原生组件封装
+  适合：跨框架的组件共享
+```
+
+## 六、环境管理
+
+```
+.env                  # 所有环境共享
+.env.local            # 本地覆盖（不提交 git）
+.env.development      # 开发环境
+.env.production       # 生产环境
+.env.staging          # 预发环境
+```
+
+```bash
+# .env.development
+NEXT_PUBLIC_API_URL=http://localhost:3001
+NEXT_PUBLIC_ENV=development
+
+# .env.production
+NEXT_PUBLIC_API_URL=https://api.example.com
+NEXT_PUBLIC_ENV=production
+```
+
+```typescript
+// 类型安全的环境变量
+// env.d.ts
+declare namespace NodeJS {
+  interface ProcessEnv {
+    NEXT_PUBLIC_API_URL: string
+    NEXT_PUBLIC_ENV: 'development' | 'staging' | 'production'
+    DATABASE_URL: string
+    ANTHROPIC_API_KEY: string
+  }
+}
+```
+
+## 七、错误监控
+
+```typescript
+// 全局错误捕获
+// app/error.tsx（Next.js App Router 错误边界）
+'use client'
+
+export default function Error({
+  error,
+  reset,
+}: {
+  error: Error
+  reset: () => void
+}) {
+  useEffect(() => {
+    // 上报错误到监控平台（Sentry / 自建）
+    reportError(error)
+  }, [error])
+
+  return (
+    <div>
+      <h2>出错了</h2>
+      <button onClick={reset}>重试</button>
+    </div>
+  )
+}
+```
+
+```typescript
+// 性能 + 错误统一上报
+class Monitor {
+  // 资源加载错误
+  initResourceError() {
+    window.addEventListener('error', (e) => {
+      if (e.target instanceof HTMLElement) {
+        this.report({
+          type: 'resource_error',
+          url: (e.target as any).src || (e.target as any).href,
+          tagName: e.target.tagName,
+        })
+      }
+    }, true)
+  }
+
+  // Promise 未捕获错误
+  initUnhandledRejection() {
+    window.addEventListener('unhandledrejection', (e) => {
+      this.report({
+        type: 'unhandled_rejection',
+        message: e.reason?.message || String(e.reason),
+      })
+    })
+  }
+
+  // 接口错误
+  initFetchError() {
+    const originalFetch = window.fetch
+    window.fetch = async (...args) => {
+      const start = Date.now()
+      try {
+        const res = await originalFetch(...args)
+        if (!res.ok) {
+          this.report({
+            type: 'api_error',
+            url: args[0] as string,
+            status: res.status,
+            duration: Date.now() - start,
+          })
+        }
+        return res
+      } catch (err) {
+        this.report({ type: 'network_error', url: args[0] as string })
+        throw err
+      }
+    }
+  }
+}
+```
+
+## 工程化检查清单
+
+```
+代码规范：
+  □ ESLint + Prettier 配置
+  □ TypeScript strict 模式
+  □ husky + lint-staged 自动检查
+  □ commitlint 提交规范
+
+构建：
+  □ 代码分割 + Tree Shaking
+  □ 图片/字体优化
+  □ Bundle 体积分析
+  □ 环境变量管理
+
+流程：
+  □ Git 分支策略
+  □ Code Review 流程
+  □ CI/CD 自动化
+  □ 版本管理（Changelog）
+
+质量：
+  □ 单元测试覆盖率
+  □ E2E 测试关键路径
+  □ 错误监控上报
+  □ 性能监控指标
+```
+
+## 总结
+
+前端工程化的目标是让团队能够**高效、高质量、可持续**地交付产品。它不是一次性的配置，而是随着项目和团队的成长不断演进的体系。从代码规范起步，逐步完善构建、测试、监控，最终形成完整的工程化闭环。

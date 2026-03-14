@@ -1,0 +1,268 @@
+---
+title: "React 生命周期完全指南：从 Class 到 Hooks"
+date: "2024-12-08"
+description: "全面梳理 React 组件的生命周期，涵盖 Class 组件三大阶段和函数组件 Hooks 的对应关系"
+tags: ["React", "生命周期", "前端"]
+cover: "/images/react-lifecycle.png"
+---
+
+## 什么是生命周期
+
+React 组件从创建到销毁，经历的一系列过程就是**生命周期**。理解生命周期，就能在正确的时机做正确的事：数据请求、DOM 操作、清理资源。
+
+## Class 组件的三大阶段
+
+```
+ ┌─────────────────────────────────────────────────────────────┐
+ │                    挂载阶段 (Mounting)                        │
+ │  constructor → getDerivedStateFromProps → render → componentDidMount │
+ └─────────────────────────────────────┬───────────────────────┘
+                                       │
+ ┌─────────────────────────────────────▼───────────────────────┐
+ │                    更新阶段 (Updating)                        │
+ │  getDerivedStateFromProps → shouldComponentUpdate →           │
+ │  render → getSnapshotBeforeUpdate → componentDidUpdate       │
+ └─────────────────────────────────────┬───────────────────────┘
+                                       │
+ ┌─────────────────────────────────────▼───────────────────────┐
+ │                    卸载阶段 (Unmounting)                      │
+ │  componentWillUnmount                                        │
+ └─────────────────────────────────────────────────────────────┘
+```
+
+### 挂载阶段（Mounting）
+
+组件第一次被创建并插入 DOM 时执行。
+
+```tsx
+class UserProfile extends React.Component {
+  // 1️⃣ constructor：初始化 state，绑定方法
+  constructor(props) {
+    super(props)
+    this.state = { user: null, loading: true }
+  }
+
+  // 2️⃣ static getDerivedStateFromProps：
+  //    根据 props 派生 state（很少使用）
+  static getDerivedStateFromProps(props, state) {
+    if (props.userId !== state.prevUserId) {
+      return { prevUserId: props.userId, user: null, loading: true }
+    }
+    return null
+  }
+
+  // 3️⃣ render：返回 JSX，必须是纯函数
+  render() {
+    if (this.state.loading) return <div>Loading...</div>
+    return <div>{this.state.user.name}</div>
+  }
+
+  // 4️⃣ componentDidMount：DOM 已挂载，可以：
+  //    - 发起网络请求
+  //    - 操作 DOM
+  //    - 添加事件监听
+  //    - 启动定时器
+  componentDidMount() {
+    this.fetchUser(this.props.userId)
+  }
+}
+```
+
+### 更新阶段（Updating）
+
+当 props 或 state 变化时触发。
+
+```tsx
+class UserProfile extends React.Component {
+  // 1️⃣ shouldComponentUpdate：性能优化的关键
+  //    返回 false 可以阻止不必要的渲染
+  shouldComponentUpdate(nextProps, nextState) {
+    return nextProps.userId !== this.props.userId
+        || nextState.user !== this.state.user
+  }
+
+  // 2️⃣ render：重新生成 Virtual DOM
+
+  // 3️⃣ getSnapshotBeforeUpdate：DOM 更新前的快照
+  //    比如记录滚动位置
+  getSnapshotBeforeUpdate(prevProps, prevState) {
+    if (prevState.messages.length < this.state.messages.length) {
+      const list = this.listRef.current
+      return list.scrollHeight - list.scrollTop  // 返回滚动偏移
+    }
+    return null
+  }
+
+  // 4️⃣ componentDidUpdate：DOM 已更新
+  //    snapshot 是 getSnapshotBeforeUpdate 的返回值
+  componentDidUpdate(prevProps, prevState, snapshot) {
+    if (snapshot !== null) {
+      const list = this.listRef.current
+      list.scrollTop = list.scrollHeight - snapshot  // 恢复滚动位置
+    }
+
+    // 常见用法：props 变化后重新请求数据
+    if (prevProps.userId !== this.props.userId) {
+      this.fetchUser(this.props.userId)
+    }
+  }
+}
+```
+
+### 卸载阶段（Unmounting）
+
+组件从 DOM 中移除时执行。
+
+```tsx
+class UserProfile extends React.Component {
+  componentWillUnmount() {
+    // 清理一切"副作用"
+    clearInterval(this.timer)               // 清除定时器
+    this.abortController.abort()            // 取消请求
+    window.removeEventListener('resize', this.handleResize)  // 移除监听
+    this.subscription.unsubscribe()         // 取消订阅
+  }
+}
+```
+
+### 错误处理
+
+```tsx
+class ErrorBoundary extends React.Component {
+  // 捕获子组件渲染时的错误
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error }
+  }
+
+  // 捕获错误后的回调（可以上报日志）
+  componentDidCatch(error, errorInfo) {
+    logErrorToService(error, errorInfo.componentStack)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return <div>页面出错了，请刷新重试</div>
+    }
+    return this.props.children
+  }
+}
+```
+
+> 注意：错误边界只能用 Class 组件实现，函数组件暂不支持 `componentDidCatch`。
+
+## 函数组件 + Hooks 的对应关系
+
+React 16.8 引入 Hooks 后，函数组件完全可以替代 Class 组件：
+
+```
+ Class 组件                              函数组件 + Hooks
+ ─────────────────────────────────────────────────────────
+ constructor                    →  useState 初始化
+ getDerivedStateFromProps       →  渲染时直接计算 / useMemo
+ shouldComponentUpdate          →  React.memo
+ render                         →  函数体本身
+ componentDidMount              →  useEffect(() => {}, [])
+ componentDidUpdate             →  useEffect(() => {}, [deps])
+ componentWillUnmount           →  useEffect 的 return 清理函数
+ getSnapshotBeforeUpdate        →  useLayoutEffect（近似）
+ componentDidCatch              →  暂无对应 Hook
+```
+
+### 完整对照示例
+
+```tsx
+// ===== Class 组件版本 =====
+class Timer extends React.Component {
+  state = { count: 0 }
+
+  componentDidMount() {
+    this.timer = setInterval(() => {
+      this.setState(prev => ({ count: prev.count + 1 }))
+    }, 1000)
+  }
+
+  componentDidUpdate(prevProps) {
+    if (prevProps.title !== this.props.title) {
+      document.title = this.props.title
+    }
+  }
+
+  componentWillUnmount() {
+    clearInterval(this.timer)
+  }
+
+  render() {
+    return <div>{this.state.count}</div>
+  }
+}
+
+// ===== 函数组件版本 =====
+function Timer({ title }) {
+  const [count, setCount] = useState(0)
+
+  // 等价于 componentDidMount + componentWillUnmount
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCount(prev => prev + 1)
+    }, 1000)
+    return () => clearInterval(timer)  // 清理
+  }, [])  // 空依赖 = 只在挂载时执行
+
+  // 等价于 componentDidUpdate（监听 title 变化）
+  useEffect(() => {
+    document.title = title
+  }, [title])  // title 变化时执行
+
+  return <div>{count}</div>
+}
+```
+
+## React 18 的生命周期变化
+
+### Strict Mode 双重调用
+
+在开发模式下，React 18 的 `<StrictMode>` 会**故意调用两次**某些生命周期方法：
+
+```
+组件挂载流程（开发模式）：
+1. constructor ×2
+2. render ×2
+3. useEffect 的 setup ×1
+4. useEffect 的 cleanup ×1  ← 立即清理
+5. useEffect 的 setup ×1    ← 再次执行
+
+目的：帮你发现副作用中的 bug
+```
+
+这意味着你的 `useEffect` 必须能安全地**执行 → 清理 → 再执行**。
+
+### Concurrent Mode 下的注意事项
+
+React 18 的并发模式下，render 可能被中断和重启：
+
+```
+传统模式：  render ──────────────── commit ── effect
+                                     │
+                                  DOM 更新
+
+并发模式：  render ── 中断 ── render ── commit ── effect
+                       ↑
+                   高优先级任务插入
+```
+
+这意味着：
+- `render` 函数必须是**纯函数**，不能有副作用
+- 副作用只能放在 `useEffect` / `useLayoutEffect` / 事件处理函数中
+
+## 总结
+
+| 时机 | 推荐方式 | 典型用途 |
+|------|---------|---------|
+| 初始化状态 | `useState` | 定义组件的初始数据 |
+| 挂载后执行 | `useEffect(() => {}, [])` | 请求数据、DOM操作 |
+| 依赖变化后执行 | `useEffect(() => {}, [dep])` | 响应 props/state 变化 |
+| 卸载时清理 | `useEffect` 的返回函数 | 取消订阅、清除定时器 |
+| 性能优化 | `React.memo` | 避免不必要的重渲染 |
+| 错误边界 | Class 组件 `componentDidCatch` | 捕获子组件错误 |
+
+现代 React 开发推荐全面使用**函数组件 + Hooks**，Class 组件的生命周期方法作为理解底层原理的知识储备。

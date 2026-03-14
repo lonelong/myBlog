@@ -1,0 +1,250 @@
+---
+title: "ISR 增量静态再生：SSG 和 SSR 的完美中间地带"
+date: "2024-11-22"
+description: "深入理解 ISR（Incremental Static Regeneration）如何在不重新构建的情况下更新静态页面"
+tags: ["ISR", "渲染模式", "Next.js", "前端架构"]
+cover: "/images/isr.png"
+---
+
+## 什么是 ISR
+
+ISR（Incremental Static Regeneration，增量静态再生）是 Next.js 提出的渲染策略，它结合了 SSG 和 SSR 的优点：
+
+- **像 SSG 一样**：页面是预渲染的静态 HTML，通过 CDN 快速分发
+- **像 SSR 一样**：页面可以在后台定时更新，不需要完整重新构建
+
+```
+SSG:  构建时生成一次 → 永远不变（除非重新构建）
+SSR:  每次请求都重新生成 → 永远最新（但服务器压力大）
+ISR:  构建时生成 → 过期后在后台重新生成 → 兼顾速度和新鲜度
+```
+
+## ISR 的工作原理
+
+```
+时间线：
+  0s        构建完成，生成 HTML
+  │
+  ▼
+  用户A访问 → 返回缓存的 HTML（即时）       ← 和 SSG 一样快
+  用户B访问 → 返回缓存的 HTML（即时）
+  │
+  60s       revalidate 时间到期
+  │
+  ▼
+  用户C访问 → 返回旧的缓存 HTML（即时）     ← 用户不用等
+             → 同时后台触发重新生成          ← stale-while-revalidate
+  │
+  ▼
+  后台生成完成 → 新 HTML 替换旧缓存
+  │
+  ▼
+  用户D访问 → 返回新的 HTML（即时）          ← 内容已更新
+```
+
+### 核心策略：Stale-While-Revalidate
+
+```
+           请求到达
+              │
+              ▼
+      ┌───── 缓存是否过期？ ─────┐
+      │                          │
+     否                          是
+      │                          │
+      ▼                          ▼
+  返回缓存                  返回旧缓存（先给用户）
+  （即时）                  同时后台重新生成
+                                 │
+                                 ▼
+                           生成完成 → 更新缓存
+                                 │
+                                 ▼
+                           下次请求返回新内容
+```
+
+**关键**：过期后的第一个请求仍然返回旧内容（不让用户等），但触发后台更新。下一个请求才会拿到新内容。
+
+## Next.js 中的 ISR 实现
+
+### App Router（推荐）
+
+```tsx
+// app/products/[id]/page.tsx
+
+async function ProductPage({ params }: { params: { id: string } }) {
+  // fetch 添加 revalidate 选项 = ISR
+  const res = await fetch(`https://api.example.com/products/${params.id}`, {
+    next: { revalidate: 60 },  // 60 秒后允许重新生成
+  })
+  const product = await res.json()
+
+  return (
+    <div>
+      <h1>{product.name}</h1>
+      <p>价格：¥{product.price}</p>
+      <p>库存：{product.stock}</p>
+    </div>
+  )
+}
+```
+
+也可以在页面级别设置：
+
+```tsx
+// app/products/[id]/page.tsx
+
+// 整个页面每 60 秒重新验证一次
+export const revalidate = 60
+
+async function ProductPage({ params }) {
+  const product = await getProduct(params.id)
+  return <div>{product.name}</div>
+}
+```
+
+### Pages Router（旧版）
+
+```tsx
+// pages/products/[id].tsx
+
+export async function getStaticProps({ params }) {
+  const product = await getProduct(params.id)
+  return {
+    props: { product },
+    revalidate: 60,  // ISR：60 秒后重新生成
+  }
+}
+
+export async function getStaticPaths() {
+  const popular = await getPopularProducts()
+  return {
+    paths: popular.map(p => ({ params: { id: p.id } })),
+    fallback: 'blocking',  // 未预渲染的页面：首次访问时 SSR，之后缓存
+  }
+}
+```
+
+## 按需重新验证（On-Demand Revalidation）
+
+除了定时过期，Next.js 还支持**主动触发**重新生成：
+
+```tsx
+// app/api/revalidate/route.ts
+
+import { revalidatePath, revalidateTag } from 'next/cache'
+
+export async function POST(req: Request) {
+  const { secret, path, tag } = await req.json()
+
+  // 验证密钥
+  if (secret !== process.env.REVALIDATION_SECRET) {
+    return Response.json({ error: 'Invalid secret' }, { status: 401 })
+  }
+
+  // 方式1：按路径重新生成
+  if (path) {
+    revalidatePath(path)  // 如 '/products/123'
+  }
+
+  // 方式2：按标签重新生成
+  if (tag) {
+    revalidateTag(tag)  // 如 'products'
+  }
+
+  return Response.json({ revalidated: true })
+}
+```
+
+### 实际应用：CMS Webhook
+
+```
+编辑在 CMS 中更新了商品价格
+         │
+         ▼
+CMS 发送 Webhook → POST /api/revalidate
+                   { secret: "xxx", path: "/products/123" }
+         │
+         ▼
+Next.js 后台重新生成 /products/123 的 HTML
+         │
+         ▼
+下次用户访问 → 看到最新价格
+         │
+整个过程: 编辑更新 → 几秒内生效 → 不需要完整重新构建
+```
+
+## ISR 的三种 fallback 策略
+
+对于构建时未预渲染的页面（如新增的商品），有三种处理方式：
+
+```tsx
+export async function getStaticPaths() {
+  return {
+    paths: [...],
+
+    // 方式1：fallback: false
+    // 未预渲染的路径 → 直接返回 404
+    // 适用：页面数量固定，不会新增
+
+    // 方式2：fallback: true
+    // 未预渲染的路径 → 先返回 fallback UI（Loading）
+    // → 后台生成 → 客户端更新为真实内容
+    // 适用：大量页面，首次访问可以等一下
+
+    // 方式3：fallback: 'blocking'
+    // 未预渲染的路径 → 服务端阻塞生成（像 SSR）
+    // → 生成完成后返回完整 HTML → 之后缓存
+    // 适用：不想显示 Loading，SEO 重要
+
+    fallback: 'blocking',
+  }
+}
+```
+
+```
+fallback: false
+  已预渲染页面 → 返回 HTML
+  未预渲染页面 → 404
+
+fallback: true
+  已预渲染页面 → 返回 HTML
+  未预渲染页面 → 返回 Loading → 后台生成 → 客户端更新
+
+fallback: 'blocking'
+  已预渲染页面 → 返回 HTML
+  未预渲染页面 → 等待生成完成 → 返回完整 HTML
+```
+
+## 四种渲染模式对比总结
+
+| 特性 | CSR | SSR | SSG | ISR |
+|------|-----|-----|-----|-----|
+| 渲染时机 | 浏览器端 | 每次请求时 | 构建时 | 构建时 + 定时更新 |
+| 首屏速度 | 慢 | 快 | **最快** | **最快** |
+| SEO | 差 | 好 | **好** | **好** |
+| 数据新鲜度 | 实时 | 实时 | 构建时 | **近实时** |
+| 服务器负担 | 无 | **高** | 无 | 低 |
+| CDN 缓存 | ✅ | ❌ | ✅ | ✅ |
+| 个性化内容 | ✅ | ✅ | ❌ | ❌ |
+| 适用场景 | 后台系统 | 动态页面 | 静态内容 | **大多数场景** |
+
+### 选择决策树
+
+```
+你的页面需要……
+  │
+  ├─ 完全不需要 SEO + 强交互 → CSR
+  │
+  ├─ 需要 SEO
+  │   ├─ 数据很少变化 → SSG
+  │   ├─ 数据偶尔变化 → ISR（推荐）
+  │   └─ 数据实时变化 + 个性化 → SSR
+  │
+  └─ 同一页面混合需求
+      └─ 静态壳 SSG/ISR + 动态部分 CSR（推荐组合）
+```
+
+## 总结
+
+ISR 是目前 Next.js 推荐的默认渲染策略，它用极低的成本获得了接近 SSG 的性能和接近 SSR 的数据新鲜度。配合按需重新验证（On-Demand Revalidation），可以实现"内容更新后秒级生效"的效果，是大多数内容型网站的最佳选择。

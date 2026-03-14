@@ -1,0 +1,268 @@
+---
+title: "SSG 静态站点生成：原理、流程与最佳实践"
+date: "2024-11-24"
+description: "深入理解 SSG（Static Site Generation）的工作原理，为什么它是内容型网站的最佳选择"
+tags: ["SSG", "渲染模式", "Next.js", "前端架构"]
+cover: "/images/ssg.png"
+---
+
+## 什么是 SSG
+
+SSG（Static Site Generation，静态站点生成）是指在**构建时（build time）** 就把所有页面预渲染成完整的 HTML 文件。部署后，服务器只需要返回这些已经生成好的 HTML，不需要任何运行时计算。
+
+```
+CSR:  用户请求 → 服务器返回空 HTML → 浏览器 JS 渲染
+SSR:  用户请求 → 服务器实时渲染 HTML → 返回给浏览器
+SSG:  构建时生成 HTML → 用户请求 → CDN 直接返回 HTML（最快）
+```
+
+## SSG 的完整流程
+
+```
+                    构建阶段（npm run build）
+ ┌──────────────────────────────────────────────────┐
+ │                                                   │
+ │  1. 扫描所有页面路由                                │
+ │  2. 对每个路由：                                    │
+ │     ├── 调用数据获取函数（getStaticProps）           │
+ │     ├── 获取 API/CMS/文件系统的数据                 │
+ │     ├── 执行 React 渲染 → 生成 HTML 字符串          │
+ │     └── 写入 .html 文件                            │
+ │  3. 同时生成对应的 JSON 数据文件                     │
+ │                                                   │
+ │  输出：                                            │
+ │  /out                                             │
+ │  ├── index.html          ← 首页                    │
+ │  ├── about.html          ← 关于页                  │
+ │  ├── blog/                                        │
+ │  │   ├── post-1.html     ← 博客文章1               │
+ │  │   ├── post-2.html     ← 博客文章2               │
+ │  │   └── post-3.html     ← 博客文章3               │
+ │  └── _next/data/                                  │
+ │      └── posts.json      ← 客户端路由用的数据        │
+ └──────────────────────────────────────────────────┘
+
+                    运行阶段（用户访问）
+ ┌──────────────────────────────────────────────────┐
+ │                                                   │
+ │  用户请求 /blog/post-1                             │
+ │       │                                           │
+ │       ▼                                           │
+ │  CDN 直接返回 post-1.html ← 不需要服务器计算        │
+ │       │                                           │
+ │       ▼                                           │
+ │  浏览器立即渲染完整内容 ← 毫秒级响应                  │
+ │       │                                           │
+ │       ▼                                           │
+ │  JS 加载后 Hydration → 页面可交互                   │
+ │                                                   │
+ └──────────────────────────────────────────────────┘
+```
+
+## Next.js 中的 SSG 实现
+
+### App Router（推荐）
+
+```tsx
+// app/blog/[slug]/page.tsx
+
+// 构建时告诉 Next.js 有哪些路径需要预渲染
+export async function generateStaticParams() {
+  const posts = await getAllPosts()
+  return posts.map(post => ({
+    slug: post.slug,  // 生成 /blog/hello-world, /blog/react-tips 等
+  }))
+}
+
+// 构建时为每个 slug 执行一次，获取数据
+async function BlogPost({ params }: { params: { slug: string } }) {
+  const post = await getPostBySlug(params.slug)
+
+  return (
+    <article>
+      <h1>{post.title}</h1>
+      <time>{post.date}</time>
+      <div dangerouslySetInnerHTML={{ __html: post.content }} />
+    </article>
+  )
+}
+
+export default BlogPost
+```
+
+### Pages Router（旧版）
+
+```tsx
+// pages/blog/[slug].tsx
+
+// 构建时获取所有路径
+export async function getStaticPaths() {
+  const posts = await getAllPosts()
+  return {
+    paths: posts.map(post => ({ params: { slug: post.slug } })),
+    fallback: false,  // 未预渲染的路径返回 404
+  }
+}
+
+// 构建时为每个路径获取数据
+export async function getStaticProps({ params }) {
+  const post = await getPostBySlug(params.slug)
+  return {
+    props: { post },
+  }
+}
+
+function BlogPost({ post }) {
+  return <article>{post.title}</article>
+}
+```
+
+## SSG 的核心优势
+
+### 1. 极致的加载速度
+
+```
+SSG 的响应路径：
+  用户 → CDN 边缘节点 → 返回 HTML（缓存命中）
+  延迟: 5-50ms（取决于物理距离）
+
+SSR 的响应路径：
+  用户 → CDN → 源服务器 → 数据库 → 渲染 → 返回
+  延迟: 200-2000ms
+
+差距: 10-100 倍
+```
+
+### 2. 天然 CDN 友好
+
+```
+           ┌── 北京节点（缓存 HTML）
+           │
+用户请求 ──┼── 上海节点（缓存 HTML）
+           │
+           └── 广州节点（缓存 HTML）
+
+每个 CDN 节点都缓存了完整的 HTML
+用户从最近的节点获取，不需要回源
+```
+
+### 3. 完美的 SEO
+
+```html
+<!-- 爬虫看到的 SSG 页面：完整内容 -->
+<article>
+  <h1>React 性能优化技巧</h1>
+  <p>性能直接影响用户体验...</p>
+  <pre><code>const MemoComp = React.memo(...</code></pre>
+</article>
+<!-- 所有内容都在 HTML 中，爬虫完美抓取 -->
+```
+
+### 4. 零服务器负担
+
+```
+SSR:  100 用户同时访问 → 服务器执行 100 次渲染 → 高 CPU 负载
+SSG:  100 用户同时访问 → CDN 返回 100 份缓存 → 服务器零负载
+
+SSG 的"服务器"可以是：
+  - GitHub Pages（免费）
+  - Vercel（免费额度很大）
+  - 任何静态文件托管（S3、OSS）
+  - 不需要 Node.js 运行时
+```
+
+## SSG 的局限性
+
+### 1. 构建时间与页面数量
+
+```
+100 个页面  → 构建 30 秒    ✅
+1000 个页面 → 构建 5 分钟    😐
+10000 个页面 → 构建 30+ 分钟  😱
+
+解决方案：ISR（增量静态再生）
+```
+
+### 2. 不适合实时数据
+
+```
+场景：电商网站的商品价格
+
+SSG 构建时：价格 = ¥99
+用户访问时：价格已经改为 ¥79
+但 HTML 仍然显示 ¥99 ← 过期数据！
+
+必须重新构建才能更新价格
+```
+
+### 3. 不适合个性化内容
+
+```
+SSG 生成的页面对所有用户都一样：
+  "欢迎，用户！"  ← 不知道是谁
+
+不能做到：
+  "欢迎，Alice！您有 3 条新消息" ← 个性化内容需要 SSR 或 CSR
+```
+
+## 适用场景
+
+```
+✅ 完美适合 SSG：
+  ├── 博客 / 技术文档
+  ├── 产品官网 / 落地页
+  ├── 帮助中心 / FAQ
+  ├── 作品集展示
+  ├── 内容很少变动的页面
+  └── 本博客就是用 SSG 构建的！
+
+❌ 不适合 SSG：
+  ├── 实时数据展示（股票、天气）
+  ├── 个性化内容（推荐、Feed 流）
+  ├── 频繁更新的大量页面
+  └── 用户登录后的个人页面
+```
+
+## SSG + CSR 混合模式
+
+实际项目中，SSG 常常和 CSR 结合使用：
+
+```tsx
+// 博客详情页：静态内容用 SSG，评论用 CSR
+export async function generateStaticParams() {
+  return posts.map(p => ({ slug: p.slug }))
+}
+
+async function BlogPost({ params }) {
+  const post = await getPost(params.slug)
+
+  return (
+    <article>
+      {/* SSG 部分：构建时生成 */}
+      <h1>{post.title}</h1>
+      <div>{post.content}</div>
+
+      {/* CSR 部分：客户端动态加载 */}
+      <CommentSection postId={post.id} />
+    </article>
+  )
+}
+
+// 评论组件：客户端渲染
+'use client'
+function CommentSection({ postId }) {
+  const [comments, setComments] = useState([])
+
+  useEffect(() => {
+    fetch(`/api/comments?postId=${postId}`)
+      .then(res => res.json())
+      .then(setComments)
+  }, [postId])
+
+  return <div>{comments.map(c => <Comment key={c.id} {...c} />)}</div>
+}
+```
+
+## 总结
+
+SSG 是内容型网站的**最佳渲染模式**：加载最快、SEO 最好、成本最低。对于数据更新频率较高的场景，可以搭配 ISR（增量静态再生）来获得两全其美的效果。

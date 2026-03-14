@@ -1,0 +1,359 @@
+---
+title: "CI/CD 持续集成与持续部署：从原理到 GitHub Actions 实战"
+date: "2024-11-02"
+description: "全面理解 CI/CD 的概念和价值，通过 GitHub Actions 搭建自动化构建、测试、部署流水线"
+tags: ["CI/CD", "DevOps", "GitHub Actions", "自动化"]
+cover: "/images/cicd.png"
+---
+
+## 什么是 CI/CD
+
+```
+CI（Continuous Integration）持续集成：
+  开发者每次提交代码 → 自动构建 + 自动测试 → 快速发现问题
+
+CD（Continuous Delivery）持续交付：
+  CI 通过后 → 自动部署到预发环境 → 随时可以一键发布到生产
+
+CD（Continuous Deployment）持续部署：
+  CI 通过后 → 直接自动部署到生产环境 → 全自动
+```
+
+### 没有 CI/CD vs 有 CI/CD
+
+```
+❌ 没有 CI/CD：
+  开发 → 本地测试（可能忘了）→ 手动打包 → 手动上传服务器 → 祈祷不出错
+  │          │                    │              │
+  └── 可能忘 ──┘          ── 容易出错 ──┘     ── 回滚困难 ──┘
+
+✅ 有 CI/CD：
+  git push → 自动运行测试 → 自动构建 → 自动部署 → 自动通知
+  │              │              │           │          │
+  └── 触发流水线 ──┘     ── 全自动 ──┘   ── 秒级 ──┘  ── Slack/飞书通知
+```
+
+## CI/CD 的完整流程
+
+```
+ Developer                CI Server              Staging        Production
+    │                        │                     │               │
+    │── git push ───────────▶│                     │               │
+    │                        │                     │               │
+    │                   ┌────▼─────┐               │               │
+    │                   │ 代码检查   │               │               │
+    │                   │ ESLint    │               │               │
+    │                   │ TypeCheck │               │               │
+    │                   └────┬─────┘               │               │
+    │                        │ ✅                   │               │
+    │                   ┌────▼─────┐               │               │
+    │                   │ 单元测试   │               │               │
+    │                   │ Jest      │               │               │
+    │                   └────┬─────┘               │               │
+    │                        │ ✅                   │               │
+    │                   ┌────▼─────┐               │               │
+    │                   │ 构建      │               │               │
+    │                   │ next build│               │               │
+    │                   └────┬─────┘               │               │
+    │                        │ ✅                   │               │
+    │                   ┌────▼─────┐               │               │
+    │                   │ E2E 测试  │               │               │
+    │                   │ Playwright│               │               │
+    │                   └────┬─────┘               │               │
+    │                        │ ✅                   │               │
+    │                        │── deploy ──────────▶│               │
+    │                        │                     │ Preview URL   │
+    │◀── 通知：部署预览 ────────│                     │               │
+    │                        │                     │               │
+    │── approve ────────────▶│                     │               │
+    │                        │── deploy ───────────────────────────▶│
+    │◀── 通知：已发布 ─────────│                     │               │
+```
+
+## GitHub Actions 实战配置
+
+### 基础 CI 流水线
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # 第一步：代码质量检查
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: TypeScript 类型检查
+        run: npx tsc --noEmit
+
+  # 第二步：单元测试
+  test:
+    runs-on: ubuntu-latest
+    needs: lint  # 依赖 lint 通过
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+      - run: npm test -- --coverage
+
+      # 上传覆盖率报告
+      - uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage/lcov.info
+
+  # 第三步：构建
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+      - run: npm run build
+
+      # 缓存构建产物
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: .next/
+```
+
+### CD：自动部署到 Vercel
+
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to Vercel
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.ORG_ID }}
+          vercel-project-id: ${{ secrets.PROJECT_ID }}
+          vercel-args: '--prod'
+
+      # 部署成功后通知
+      - name: Notify
+        if: success()
+        run: |
+          curl -X POST ${{ secrets.WEBHOOK_URL }} \
+            -H 'Content-Type: application/json' \
+            -d '{"text": "🚀 生产部署成功！"}'
+```
+
+### PR 预览环境
+
+```yaml
+# .github/workflows/preview.yml
+name: Preview
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy Preview
+        id: deploy
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.ORG_ID }}
+          vercel-project-id: ${{ secrets.PROJECT_ID }}
+          # 不加 --prod，自动创建预览 URL
+
+      # 在 PR 中评论预览地址
+      - name: Comment PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `🔍 预览地址: ${{ steps.deploy.outputs.preview-url }}`
+            })
+```
+
+## 核心概念详解
+
+### Pipeline（流水线）
+
+```yaml
+# 流水线是 CI/CD 的核心概念
+# 由多个 Stage 组成，每个 Stage 包含多个 Job
+
+Pipeline:
+  ├── Stage: Lint
+  │   └── Job: eslint + tsc
+  │
+  ├── Stage: Test（依赖 Lint）
+  │   ├── Job: unit-test
+  │   └── Job: e2e-test（可并行）
+  │
+  ├── Stage: Build（依赖 Test）
+  │   └── Job: next build
+  │
+  └── Stage: Deploy（依赖 Build）
+      └── Job: vercel deploy
+```
+
+### 缓存加速
+
+```yaml
+# 缓存 node_modules 避免每次重新安装
+- uses: actions/cache@v4
+  with:
+    path: |
+      ~/.npm
+      node_modules
+      .next/cache
+    key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+    restore-keys: |
+      ${{ runner.os }}-node-
+
+# 效果：
+# 首次运行: npm ci → 90秒
+# 缓存命中: npm ci → 10秒（只检查，不安装）
+```
+
+### 环境变量和密钥管理
+
+```yaml
+# GitHub Repository → Settings → Secrets
+# 添加：VERCEL_TOKEN, DATABASE_URL, API_KEY 等
+
+jobs:
+  deploy:
+    environment: production  # 关联到 GitHub Environment
+    steps:
+      - name: Build
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          NEXT_PUBLIC_API_URL: ${{ vars.API_URL }}  # vars = 非加密变量
+        run: npm run build
+
+# 密钥在日志中自动被 *** 遮蔽
+```
+
+## 最佳实践
+
+### 1. 分支策略
+
+```
+main（生产）
+  │
+  ├── develop（开发）
+  │     │
+  │     ├── feature/user-auth
+  │     ├── feature/blog-search
+  │     └── fix/login-bug
+  │
+  └── release/v1.2.0（发布候选）
+
+流程：
+  feature → develop（CI 通过后合并）
+  develop → release（QA 测试）
+  release → main（上线）
+  main → hotfix → main（紧急修复）
+```
+
+### 2. 提交规范
+
+```
+feat: 新功能
+fix: 修复 bug
+docs: 文档更新
+style: 格式调整（不影响代码）
+refactor: 重构
+test: 测试
+chore: 构建/工具变更
+
+示例：
+  feat: add user authentication
+  fix: resolve login timeout issue
+  docs: update API documentation
+```
+
+### 3. 构建时间优化
+
+```yaml
+# 并行执行无依赖的任务
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps: [...]
+
+  unit-test:
+    runs-on: ubuntu-latest
+    # 不写 needs → 和 lint 并行执行
+    steps: [...]
+
+  e2e-test:
+    runs-on: ubuntu-latest
+    steps: [...]
+
+  build:
+    needs: [lint, unit-test]  # 等以上两个都通过
+    steps: [...]
+```
+
+## 其他 CI/CD 平台对比
+
+| 平台 | 特点 | 适用场景 |
+|------|------|---------|
+| GitHub Actions | 与 GitHub 深度集成 | GitHub 托管的项目 |
+| GitLab CI | 与 GitLab 集成 | 自建 GitLab 的团队 |
+| Jenkins | 高度可定制 | 大型企业、复杂流水线 |
+| CircleCI | 快速、易用 | 中小团队 |
+| Vercel | Next.js 零配置 | Next.js 项目 |
+
+## 总结
+
+CI/CD 的核心价值：
+
+1. **自动化**：代码提交后自动走完检查→测试→构建→部署全流程
+2. **快速反馈**：几分钟内知道代码是否有问题
+3. **一致性**：每次构建环境相同，消除"我本地是好的"
+4. **可追溯**：每次部署都有记录，随时回滚
+5. **团队协作**：PR 预览、自动检查让 Code Review 更高效
