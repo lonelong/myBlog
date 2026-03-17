@@ -98,9 +98,9 @@ export default function HomePage() {
             </h1>
 
             <p className="text-lg sm:text-xl text-[var(--text-secondary)] max-w-2xl mx-auto mb-10 leading-relaxed">
-              专注于 React / Next.js 生态的前端工程师，热爱开源，
+              专注于 React / Next.js 生态的全栈工程师。
               <br className="hidden sm:block" />
-              分享技术文章和构建有趣的项目。
+              这里有我写的技术文章、做的开源项目，以及一个能和你聊天的 AI。
             </p>
 
             <div className="flex flex-wrap items-center justify-center gap-4">
