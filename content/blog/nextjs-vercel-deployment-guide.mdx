@@ -261,16 +261,16 @@ rm pnpm-lock.yaml
 
 ### 坑 4：环境变量在页面中不生效
 
-**现象**：`.env` 中设置了 `NEXT_PUBLIC_AUTHOR_NAME=ZW`，但页面上显示的还是硬编码的值。
+**现象**：`.env` 中设置了 `NEXT_PUBLIC_AUTHOR_NAME=Ninal_zw`，但页面上显示的还是硬编码的值。
 
-**原因**：虽然设置了环境变量，但代码中到处是硬编码的 `"ZW"`，并没有读取环境变量。
+**原因**：虽然设置了环境变量，但代码中到处是硬编码的 `"Ninal_zw"`，并没有读取环境变量。
 
 **解决方案**：创建一个集中配置文件，所有组件从这里读取：
 
 ```typescript
 // src/lib/config.ts
 export const siteConfig = {
-  authorName: process.env.NEXT_PUBLIC_AUTHOR_NAME || 'ZW',
+  authorName: process.env.NEXT_PUBLIC_AUTHOR_NAME || 'Ninal_zw',
   siteUrl: process.env.NEXT_PUBLIC_SITE_URL || 'https://ninal.online',
   githubUrl: process.env.NEXT_PUBLIC_GITHUB_URL,
   twitterUrl: process.env.NEXT_PUBLIC_TWITTER_URL,
