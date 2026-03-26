@@ -34,7 +34,7 @@ export const metadata: Metadata = {
     default: `${siteConfig.authorName} | 前端开发者`,
     template: `%s | ${siteConfig.authorName}`,
   },
-  description: '专注 React/Next.js 的前端工程师，分享技术文章与开源项目',
+  description: '全栈开发工程师，深耕 React / Next.js 全栈开发，熟悉 Vue、Angular 等多套前端框架，可快速适配不同技术栈项目',
   keywords: ['前端开发', 'React', 'Next.js', 'TypeScript', '作品集', '博客'],
   authors: [{ name: siteConfig.authorName }],
   icons: {
