@@ -13,6 +13,23 @@ interface Props {
   params: { slug: string }
 }
 
+/**
+ * 安全格式化mdx frontmatter日期，防止特殊字符导致构建崩溃
+ */
+function safeFormatDate(rawDate: string | undefined) {
+  if (!rawDate) return "未知日期";
+  const d = new Date(rawDate);
+  // 判断是否为无效时间
+  if (Number.isNaN(d.getTime())) {
+    return "未知日期";
+  }
+  return d.toLocaleDateString("zh‑CN", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
+
 export async function generateStaticParams() {
   const slugs = getBlogSlugs()
   return slugs.map((slug) => ({ slug }))
@@ -73,7 +90,7 @@ export default function BlogPostPage({ params }: Props) {
               <div className="flex flex-wrap items-center gap-3 text-sm text-[var(--text-secondary)] mb-4">
                 <span className="inline-flex items-center gap-1">
                   <Calendar className="w-4 h-4" />
-                  {format(new Date(post.date), 'yyyy年MM月dd日', { locale: zhCN })}
+                  {format(safeFormatDate(post.date), 'yyyy年MM月dd日', { locale: zhCN })}
                 </span>
                 <span className="inline-flex items-center gap-1">
                   <Clock className="w-4 h-4" />
